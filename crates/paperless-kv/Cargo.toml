@@ -1,0 +1,31 @@
+[package]
+name = "paperless-kv"
+description = "The KV layout for documents: the S-2 preflight dedup gate + the document subtree keys. Layout and gate only — recognition belongs to tesseract-rs, the vocabulary to OGAR."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The convergence key. tesseract-rs deliberately does NOT stamp a content hash
+# (`docs/CONSUMER-GUIDE.md`: "This crate's doc.v1 does NOT stamp a hash"), and
+# it carries no sha2/blake3/digest dependency at all — so computing it is this
+# crate's job, by design rather than by omission.
+sha2.workspace = true
+
+# The type layer: FacetCascade / NodeGuid / NodeRow / SoaEnvelope. Zero-dep by
+# construction, so this edge costs nothing transitively.
+lance-graph-contract.workspace = true
+
+# The vocabulary: minted classids + the hot-plug fuse. OGAR is the connective
+# tissue; this crate never invents a classid.
+ogar-vocab.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

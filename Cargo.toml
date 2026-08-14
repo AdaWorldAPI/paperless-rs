@@ -1,0 +1,70 @@
+[workspace]
+resolver = "2"
+members = ["crates/paperless-kv", "crates/paperless-intake"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.97.1"
+license = "Apache-2.0"
+repository = "https://github.com/AdaWorldAPI/paperless-rs"
+
+# ---------------------------------------------------------------------------
+# Sibling wiring — git + [patch], NOT path deps
+# ---------------------------------------------------------------------------
+#
+# P0 (lance-graph CLAUDE.md): always depend on the AdaWorldAPI fork, never the
+# registry version. This repo takes the **git** form rather than the sibling
+# `path` form the tesseract-rs crates use internally, so `paperless-rs` builds
+# standalone from a bare clone — no pre-placed sibling checkouts, and the
+# Dockerfile needs no clone step for them.
+#
+# Rev pins are FIXED and deliberate (resolved 2026-08-13). Branch refs are
+# forbidden: a floating ref makes a build unreproducible and silently changes
+# what a measurement measured.
+#
+#   lance-graph  @ bfc4f6d
+#   OGAR         @ 70296be   (contains the merged ingestion spine, PR #266)
+#   tesseract-rs @ b369a97
+#   ndarray      @ 52dc61e
+#
+# ⚠ THE TRAP THE [patch] SECTIONS EXIST FOR (woa-rs learned this first; its
+# own Cargo.toml carries the same note). Crates *inside* those repos declare
+# their siblings by escaping relative path:
+#
+#   tesseract-ogar        ogar-vocab           = { path = "../../../OGAR/..." }
+#                         lance-graph-contract = { path = "../../../lance-graph/..." }
+#                         deepnsm              = { path = "../../../lance-graph/..." }
+#   tesseract-recognizer  ndarray              = { path = "../../../ndarray" }
+#   tesseract-core        lance-graph-contract = { path = "../../../lance-graph/..." }
+#   deepnsm (in LG)       ndarray              = { path = "../../../ndarray" }
+#
+# From a Cargo *git checkout* those relative paths point outside the checkout
+# and resolve to nothing. Each `[patch."<git-url>"]` below redirects the
+# escaping names to their own git source so the tree compiles under git
+# resolution. Add a crate to a patch list the moment it starts escaping —
+# the failure mode is a confusing "failed to load source", not a clear error.
+#
+# `ogar-vocab` and `lance-graph-contract` are themselves zero-dep (the latter
+# by explicit design — see its Cargo.toml comment), so nothing further needs
+# redirecting through them.
+
+[workspace.dependencies]
+tesseract-ogar = { git = "https://github.com/AdaWorldAPI/tesseract-rs", rev = "b369a9758d642d1b7f3a02b3aca2f53497f74531" }
+ogar-vocab = { git = "https://github.com/AdaWorldAPI/OGAR", rev = "70296bec67d1a5db99dd3fa92a532ba060eb0838" }
+lance-graph-contract = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "bfc4f6db700b17943967a86f196cbd040f57a333" }
+sha2 = { version = "0.10", default-features = false }
+
+[patch."https://github.com/AdaWorldAPI/tesseract-rs"]
+ogar-vocab = { git = "https://github.com/AdaWorldAPI/OGAR", rev = "70296bec67d1a5db99dd3fa92a532ba060eb0838" }
+lance-graph-contract = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "bfc4f6db700b17943967a86f196cbd040f57a333" }
+deepnsm = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "bfc4f6db700b17943967a86f196cbd040f57a333" }
+ndarray = { git = "https://github.com/AdaWorldAPI/ndarray", rev = "52dc61ed2284ab2ce2fdde5143e5d3cd618aefaf" }
+
+[patch."https://github.com/AdaWorldAPI/lance-graph"]
+# `deepnsm` (and thinking-engine, and others) carry
+# `ndarray = { path = "../../../ndarray" }`; unreachable under git resolution.
+ndarray = { git = "https://github.com/AdaWorldAPI/ndarray", rev = "52dc61ed2284ab2ce2fdde5143e5d3cd618aefaf" }
+
+[profile.release]
+strip = true

@@ -1,0 +1,12 @@
+[package]
+name = "paperless-intake"
+description = "Intake: raw bytes -> S-2 preflight gate -> tesseract-rs recognition -> doc.v1."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+paperless-kv = { path = "../paperless-kv" }
+tesseract-ogar.workspace = true

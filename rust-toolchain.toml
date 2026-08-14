@@ -1,0 +1,17 @@
+[toolchain]
+channel = "1.97.1"
+# Matches the workspace-wide pin (lance-graph #896's lance-9 / Rust-1.97.1
+# sweep; tesseract-rs, OGAR, ruff, MedCare-rs and woa-rs all pin 1.97.1).
+# This repo depends on those crates by GIT rev, so its toolchain must be at
+# least theirs: `ogar-vocab` requires 1.95 and this workspace requires
+# 1.97.1, and a container defaulting to an older `stable` fails resolution
+# with a rustc-version error rather than anything informative.
+#
+# The file makes bare `cargo` in this checkout resolve to the reviewed
+# toolchain — the drift shape #896 caught was pinning only in prose, CI
+# install lines and Dockerfile base tags. Never auto-track `stable`; bump
+# explicitly with the gates green.
+#
+# rustfmt + clippy ride the pin so `rustup show` materializes the full
+# CI-equivalent toolchain in one step.
+components = ["rustfmt", "clippy"]
