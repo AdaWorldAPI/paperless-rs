@@ -1,0 +1,30 @@
+[package]
+name = "paperless-token"
+description = "The tokenization seam: one versioned BPE receipt, borrowed by Tantivy, DeepNSM-v2 and a forward-prediction surface. Probe, not a production carrier."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The contract identity. Already a workspace dep for the S-2 convergence key.
+sha2.workspace = true
+
+# The lexical index. AdaWorldAPI fork, fixed rev, default features OFF: the
+# probe indexes in RAM, so mmap/lz4/zstd/stemmer are all dead weight here — and
+# `columnar-zstd-compression` would drag `zstd-sys`, a C build, into a tree
+# whose whole proposition is that it has no C in it.
+tantivy = { workspace = true }
+
+# The semantic consumer. Standalone crate inside the lance-graph checkout; its
+# only dependency is the zero-dep contract crate, so this edge is light.
+deepnsm-v2 = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

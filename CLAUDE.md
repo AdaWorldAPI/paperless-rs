@@ -102,7 +102,11 @@ auto-track `stable`; bump explicitly with the gates green.
 ```
 crates/
 ├── paperless-kv/       the KV layout — S-2 preflight gate, document subtree keys
-└── paperless-intake/   raw bytes → gate → tesseract-rs recognition → doc.v1
+├── paperless-intake/   raw bytes → gate → tesseract-rs recognition → doc.v1
+└── paperless-token/    the tokenization seam — ONE versioned BPE receipt,
+                        borrowed by Tantivy, DeepNSM-v2 and a forward surface
+docs/
+└── TOKEN-SEAM-ARCHITECTURE.md   the bounded architecture + the measured probe
 ```
 
 ## Status — honest
@@ -113,6 +117,14 @@ crates/
   `surreal_container::open` returns `Err(Blocked)` and every module is a
   `// TODO task NN` header). That is also what `W4-8` prescribes: *"No storage
   backend chosen (KV blob is the consumer's)."*
+- `paperless-token`: a **probe**, and it is honest about being one — 37 gates,
+  9 disable-runs verified red-then-green, two committed real corpora. It proves
+  the seam (one tokenization per span; Tantivy, DeepNSM-v2 and a forward
+  surface all borrowed off it; zero changes needed to either consumer crate)
+  and names eight gaps that stand between it and a production carrier. The
+  resident lane is still a probe-local `Vec<[u8;12]>`, not a lawful
+  `SoaEnvelope` lane. Read `docs/TOKEN-SEAM-ARCHITECTURE.md` before extending
+  it; §7 is the list of what is NOT settled.
 - `paperless-intake`: **a stub.** It exists so the `[patch]` chain is actually
   exercised by the crate graph rather than declared and unused. Recognition is
   not wired yet.
