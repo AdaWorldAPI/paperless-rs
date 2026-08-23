@@ -43,11 +43,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use deepnsm_v2::{parse_to_spo, PaletteVocab, Pos, Spo, Tagged};
+use ogar_doc_ir::{
+    from_json, to_json, BBoxRail, DocIr, DocPage, Geometry, Provenance, Rail, Region, RegionKind,
+    TableCell, DOC_IR_VERSION,
+};
 use paperless_token::contract::{query_passes, source_passes, NormRule, TokenizerContract};
+use paperless_token::docir::{spans, SpanKey};
 use paperless_token::forward::{score, windows, CountPredictor};
 use paperless_token::lane::{TokenLane, TokenStreamReceipt, IDS_PER_PARTICLE};
 use paperless_token::lexical::project;
 use paperless_token::seam_tantivy::{handle, ReceiptTokenizer, SeamStore, TermMode};
+use sha2::{Digest, Sha256};
 use tantivy::collector::TopDocs;
 use tantivy::query::PhraseQuery;
 use tantivy::schema::{IndexRecordOption, Schema, TextFieldIndexing, TextOptions, Value};
@@ -77,31 +83,75 @@ const SCENE: &[&str] = &[
      and I hid myself.",
 ];
 
-/// One corpus under test.
+/// One corpus under test — carried as the document layer's own IR, not as a
+/// bag of strings this crate invented a span numbering for.
 struct Corpus {
     name: &'static str,
-    /// The canonical text, and the span boundaries within it.
-    text: String,
-    spans: Vec<(u32, u32)>,
+    /// The ORIGINAL bytes, whose sha256 is the document identity.
+    source: Vec<u8>,
+    /// The perceptual IR a retina would have produced for those bytes.
+    ir: DocIr,
+}
+
+/// Build a `DocIr` whose regions are the given paragraphs, in reading order.
+///
+/// [`Geometry::DomOrder`] is the honest value: these are reading-order
+/// placements quantized onto the unit square, NOT measured layout. The IR has
+/// a variant for exactly that distinction and using `Rendered` here would
+/// claim a measurement nobody took.
+fn ir_from_paragraphs(source: &[u8], paras: &[String], prov: Provenance) -> DocIr {
+    let n = paras.len().max(1);
+    let regions = paras
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let y0 = u8::try_from(i * 255 / n).unwrap_or(u8::MAX);
+            let y1 = u8::try_from((i + 1) * 255 / n).unwrap_or(u8::MAX);
+            Region {
+                kind: RegionKind::Text,
+                bbox: BBoxRail {
+                    tl: Rail { x: 0, y: y0 },
+                    br: Rail { x: 255, y: y1 },
+                },
+                // Deliberately NOT the positional index: `2i+1` makes
+                // "read the field" and "renumber by position" distinguishable.
+                // With them equal, a gate that renumbers passes identically —
+                // the fixture's SHAPE is part of the coverage.
+                reading_order: u16::try_from(i * 2 + 1).unwrap_or(u16::MAX),
+                text: Some(p.clone()),
+                cells: Vec::new(),
+                children: Vec::new(),
+            }
+        })
+        .collect();
+    DocIr {
+        version: DOC_IR_VERSION.to_string(),
+        source: prov,
+        geometry: Geometry::DomOrder,
+        content_sha256: Sha256::digest(source).into(),
+        mime: "text/plain".to_string(),
+        pages: vec![DocPage {
+            number: 0,
+            width: 1,
+            height: u32::try_from(n).unwrap_or(u32::MAX),
+            regions,
+        }],
+        fields: Vec::new(),
+    }
 }
 
 fn kjv() -> Corpus {
-    let mut text = String::new();
-    let mut spans = Vec::new();
-    for v in SCENE {
-        let from = u32::try_from(text.len()).expect("fits");
-        text.push_str(v);
-        text.push('\n');
-        spans.push((from, u32::try_from(text.len()).expect("fits")));
-    }
+    let paras: Vec<String> = SCENE.iter().map(|v| (*v).to_string()).collect();
+    let source = paras.join("\n").into_bytes();
+    let ir = ir_from_paragraphs(&source, &paras, Provenance::Ocr);
     Corpus {
         name: "kjv-genesis-scene",
-        text,
-        spans,
+        source,
+        ir,
     }
 }
 
-/// Alice, split into paragraphs. Blank-line separated; a paragraph is the span.
+/// Alice, split into paragraphs. Blank-line separated; a paragraph is a region.
 fn alice(max_spans: usize) -> Corpus {
     // The committed file is CRLF with a BOM. A naive `split("\n\n")` finds
     // NOTHING in it — the first version of this probe silently produced ONE
@@ -111,25 +161,23 @@ fn alice(max_spans: usize) -> Corpus {
     let raw = include_str!("../corpus/alice.txt")
         .trim_start_matches('\u{feff}')
         .replace("\r\n", "\n");
-    let mut text = String::new();
-    let mut spans = Vec::new();
+    let mut paras: Vec<String> = Vec::new();
     for para in raw.split("\n\n") {
         let p = para.split_whitespace().collect::<Vec<_>>().join(" ");
         if p.len() < 40 {
             continue;
         }
-        let from = u32::try_from(text.len()).expect("fits");
-        text.push_str(&p);
-        text.push('\n');
-        spans.push((from, u32::try_from(text.len()).expect("fits")));
-        if spans.len() >= max_spans {
+        paras.push(p);
+        if paras.len() >= max_spans {
             break;
         }
     }
+    let source = paras.join("\n").into_bytes();
+    let ir = ir_from_paragraphs(&source, &paras, Provenance::Dom);
     Corpus {
         name: "alice-paragraphs",
-        text,
-        spans,
+        source,
+        ir,
     }
 }
 
@@ -227,17 +275,20 @@ struct Summary {
 /// Tokenize a whole corpus into ONE lane under ONE contract, then measure it.
 fn ingest(c: &Corpus, contract: &TokenizerContract, g: &mut Gate) -> (TokenLane, Summary) {
     let mut lane = TokenLane::new();
+    let doc = lane.intern_document(c.ir.content_sha256);
+    let sp = spans(&c.ir, doc);
     let mut probes = 0usize;
     let mut per_span: Vec<usize> = Vec::new();
     let before = source_passes();
-    for (i, &(from, to)) in c.spans.iter().enumerate() {
-        let bytes = &c.text.as_bytes()[from as usize..to as usize];
+    for s in &sp {
         let (tokens, p) = contract
-            .try_encode(bytes)
+            .try_encode(s.text.as_bytes())
             .expect("contract trained on this corpus");
         probes += p;
         per_span.push(tokens.len().div_ceil(IDS_PER_PARTICLE));
-        lane.append(0, u32::try_from(i).expect("fits"), from, contract, &tokens);
+        // byte_from is 0: a whole region, and the offset is REGION-LOCAL
+        // because the region owns its canonical text.
+        lane.append(s.key, 0, contract, &tokens);
     }
     let passes = source_passes() - before;
     g.run(
@@ -245,11 +296,57 @@ fn ingest(c: &Corpus, contract: &TokenizerContract, g: &mut Gate) -> (TokenLane,
             "T-PASSES[{}] exactly one source tokenization per span",
             c.name
         ),
-        passes == c.spans.len(),
+        passes == sp.len(),
         &format!(
             "{passes} source tokenizations for {} spans (1.000 per span); the three consumers \
              below add ZERO further source passes — every one of them reads the lane",
-            c.spans.len()
+            sp.len()
+        ),
+    );
+
+    // ---- the receipt is keyed by the DOCUMENT LAYER's address ----
+    // Independent ground truth: walk the IR directly rather than trusting the
+    // same `spans()` call under test.
+    let truth: Vec<(u16, u16)> =
+        c.ir.pages
+            .iter()
+            .flat_map(|pg| pg.regions.iter().map(move |r| (pg.number, r.reading_order)))
+            .collect();
+    let key_ok = truth.len() == lane.receipts().len()
+        && lane
+            .receipts()
+            .iter()
+            .zip(&truth)
+            .all(|(r, &(page, ro))| {
+                r.key.page == page
+                    && r.key.reading_order == ro
+                    && lane.document_of(r) == Some(&c.ir.content_sha256)
+            })
+        // and the orders are genuinely not the positional index, so the check
+        // above cannot be satisfied by renumbering
+        && truth.iter().enumerate().any(|(i, &(_, ro))| ro as usize != i);
+    let reinterned = {
+        let mut l2 = lane.clone();
+        let same = l2.intern_document(c.ir.content_sha256);
+        let other = l2.intern_document([0xAB; 32]);
+        same == doc && other != doc && l2.document_len() == 2
+    };
+    g.run(
+        &format!(
+            "T-DOCIR-KEY[{}] the receipt carries no id this crate minted",
+            c.name
+        ),
+        key_ok && reinterned && !sp.is_empty(),
+        &format!(
+            "every one of {} receipts resolves to the IR's own address — `content_sha256` for \
+             WHICH document and `(page, reading_order)` for WHICH span, the reading order \
+             `ogar-doc-ir` documents as the one the temporal stream and DeepNSM consume. \
+             Re-interning the same `content_sha256` returns the SAME index and a different one \
+             does not: that is the S-2 dedup property at lane scope. The hash is interned once \
+             per document, not stamped on every receipt — at these span sizes a receipt is \
+             already a third of the resident bytes and 32 more per span would have more than \
+             doubled that for no addressing gain",
+            sp.len()
         ),
     );
 
@@ -257,11 +354,11 @@ fn ingest(c: &Corpus, contract: &TokenizerContract, g: &mut Gate) -> (TokenLane,
     let mut recon_ok = true;
     let mut tokens_total = 0usize;
     let mut uniq = std::collections::HashSet::new();
-    for (r, &(from, to)) in lane.receipts().iter().zip(&c.spans) {
+    for (r, sr) in lane.receipts().iter().zip(&sp) {
         let v = lane.view(r, contract).expect("same contract");
         tokens_total += v.len();
         uniq.extend(v.ids().iter().copied());
-        if v.decode() != c.text.as_bytes()[from as usize..to as usize] {
+        if v.decode() != sr.text.as_bytes() {
             recon_ok = false;
         }
     }
@@ -277,17 +374,17 @@ fn ingest(c: &Corpus, contract: &TokenizerContract, g: &mut Gate) -> (TokenLane,
             "{} spans, {tokens_total} tokens, {} distinct ids; decode reads the lane and the \
              codebook and nothing else — the canonical text stays authoritative and is never \
              consulted to read a span back",
-            c.spans.len(),
+            sp.len(),
             uniq.len()
         ),
     );
 
     // ---- derived offsets ----
     let mut off_ok = true;
-    for (r, &(from, _)) in lane.receipts().iter().zip(&c.spans) {
+    for (r, sr) in lane.receipts().iter().zip(&sp) {
         let v = lane.view(r, contract).expect("same contract");
         // Ground truth computed the expensive way: decode each prefix.
-        let mut cursor = from;
+        let mut cursor = 0u32;
         for t in v.tokens() {
             let truth_len = contract.decode(&[t.id]).0.len();
             if t.byte_from != cursor
@@ -297,7 +394,7 @@ fn ingest(c: &Corpus, contract: &TokenizerContract, g: &mut Gate) -> (TokenLane,
             }
             cursor = t.byte_to;
         }
-        if cursor != c.spans[r.span_id as usize].1 {
+        if cursor as usize != sr.text.len() {
             off_ok = false;
         }
     }
@@ -317,8 +414,8 @@ fn ingest(c: &Corpus, contract: &TokenizerContract, g: &mut Gate) -> (TokenLane,
 
     let summary = Summary {
         name: c.name,
-        bytes: c.text.len(),
-        spans: c.spans.len(),
+        bytes: c.source.len(),
+        spans: sp.len(),
         tokens: tokens_total,
         uniq_tokens: uniq.len(),
         particles: lane.particle_len(),
@@ -356,7 +453,8 @@ fn deepnsm_arm(
     let mut flattened: Vec<Spo> = Vec::new();
     let mut offsets_ok = true;
 
-    for r in lane.receipts() {
+    let sp = spans(&c.ir, 0);
+    for (r, sr) in lane.receipts().iter().zip(&sp) {
         let v = lane.view(r, contract).expect("same contract");
         let lex = project(&v);
         // A token that carries more than one unit's start is a token straddling
@@ -370,7 +468,7 @@ fn deepnsm_arm(
             // The unit's byte span must address the canonical text and land on
             // exactly the bytes it claims (modulo the normalisation that drops
             // non-alphabetic characters inside a word).
-            let raw = &c.text.as_bytes()[u.byte_from as usize..u.byte_to as usize];
+            let raw = &sr.text.as_bytes()[u.byte_from as usize..u.byte_to as usize];
             let renorm: String = raw
                 .iter()
                 .filter(|b| b.is_ascii_alphabetic())
@@ -671,7 +769,7 @@ fn main() {
     let exotic_ws: usize = corpora
         .iter()
         .map(|c| {
-            c.text
+            String::from_utf8_lossy(&c.source)
                 .chars()
                 .filter(|ch| ch.is_whitespace() && !ch.is_ascii_whitespace())
                 .count()
@@ -680,9 +778,9 @@ fn main() {
     g.run(
         "T-CORPUS committed, real, hermetic; span population and the unicode-whitespace \
          divergence both measured",
-        corpora.iter().all(|c| c.text.len() > 1000)
-            && corpora[0].spans.len() >= 8
-            && corpora[1].spans.len() >= 100
+        corpora.iter().all(|c| c.source.len() > 1000)
+            && spans(&corpora[0].ir, 0).len() >= 8
+            && spans(&corpora[1].ir, 0).len() >= 100
             && vocab.len() > 10_000
             && exotic_ws == 0,
         &format!(
@@ -697,12 +795,152 @@ fn main() {
              char-level `is_whitespace`, occurs {exotic_ws} times across both corpora — the \
              divergence is bounded by measurement, and named as a gap rather than denied",
             corpora[0].name,
-            corpora[0].text.len(),
-            corpora[0].spans.len(),
+            corpora[0].source.len(),
+            spans(&corpora[0].ir, 0).len(),
             corpora[1].name,
-            corpora[1].text.len(),
-            corpora[1].spans.len(),
+            corpora[1].source.len(),
+            spans(&corpora[1].ir, 0).len(),
             vocab.len()
+        ),
+    );
+
+    // ---- T-DOCIR: through the IR's OWN closed-vocabulary gate ----
+    let mut roundtrip_ok = true;
+    let mut sha_ok = true;
+    for c in &corpora {
+        let json = to_json(&c.ir).expect("serialize");
+        match from_json(&json) {
+            Ok(back) => {
+                if back != c.ir {
+                    roundtrip_ok = false;
+                }
+            }
+            Err(_) => roundtrip_ok = false,
+        }
+        if c.ir.content_sha256 != <[u8; 32]>::from(Sha256::digest(&c.source)) {
+            sha_ok = false;
+        }
+    }
+    // The gate must also REFUSE: swap a region kind for one outside the closed
+    // vocabulary and the IR's own loader has to reject it, or "closed" is a
+    // word rather than a mechanism. Same for a version bump.
+    let off_vocab = to_json(&corpora[0].ir)
+        .expect("serialize")
+        .replace("\"kind\":\"text\"", "\"kind\":\"paragraph\"");
+    let refused = from_json(&off_vocab).is_err();
+    let wrong_version = to_json(&corpora[0].ir)
+        .expect("serialize")
+        .replace("\"version\":\"doc.v1\"", "\"version\":\"doc.v2\"");
+    let version_refused = from_json(&wrong_version).is_err();
+    g.run(
+        "T-DOCIR the span population comes from ogar-doc-ir, through its own load gate",
+        roundtrip_ok && sha_ok && refused && version_refused,
+        "both corpora round-trip `to_json` -> `from_json` unchanged and their \
+         `content_sha256` is the sha256 of the ORIGINAL bytes; an off-vocabulary region kind \
+         (`paragraph`) and a `doc.v2` version are BOTH refused by the IR's loader, so the \
+         closed vocabulary is a mechanism and not a word. Note what that hash IS, per the \
+         crate's own correction of its plan: a PER-ACQUISITION dedup key, not a cross-retina \
+         identity — a scan and an HTML page of one invoice have different bytes. For a \
+         TOKENIZATION receipt that is exactly the right reading: you tokenize bytes, so \
+         different bytes are a different tokenization, and cross-retina convergence is a facts \
+         question (`converges_on_facts`) that is not this seam's business. Geometry is \
+         `DomOrder` on both corpora because these are reading-order placements; claiming \
+         `Rendered` would assert a measurement nobody took",
+    );
+
+    // ---- T-DOCIR-SPANS: which regions become spans, and which do NOT ----
+    // The two text corpora contain only `Text` regions, so nothing in them can
+    // falsify how a figure or a table is handled. This purpose-built IR can:
+    // a `Figure` has no text and a `Table` carries typed `(row, col)` cells
+    // that must NOT be poured into a token stream — flattening a table into
+    // text is the mistake the ingestion doctrine names, and pouring cells in
+    // here would destroy exactly the typed structure the structured path
+    // consumes.
+    let mixed = DocIr {
+        version: DOC_IR_VERSION.to_string(),
+        source: Provenance::Ocr,
+        geometry: Geometry::Rendered,
+        content_sha256: [7u8; 32],
+        mime: "image/png".to_string(),
+        pages: vec![DocPage {
+            number: 3,
+            width: 1000,
+            height: 2000,
+            regions: vec![
+                Region {
+                    kind: RegionKind::Main,
+                    bbox: BBoxRail {
+                        tl: Rail { x: 0, y: 0 },
+                        br: Rail { x: 255, y: 255 },
+                    },
+                    reading_order: 11,
+                    text: None, // a pure container
+                    cells: Vec::new(),
+                    children: vec![Region {
+                        kind: RegionKind::Text,
+                        bbox: BBoxRail {
+                            tl: Rail { x: 0, y: 0 },
+                            br: Rail { x: 255, y: 60 },
+                        },
+                        reading_order: 12,
+                        text: Some("the nested paragraph".to_string()),
+                        cells: Vec::new(),
+                        children: Vec::new(),
+                    }],
+                },
+                Region {
+                    kind: RegionKind::Figure,
+                    bbox: BBoxRail {
+                        tl: Rail { x: 0, y: 60 },
+                        br: Rail { x: 255, y: 120 },
+                    },
+                    reading_order: 13,
+                    text: None,
+                    cells: Vec::new(),
+                    children: Vec::new(),
+                },
+                Region {
+                    kind: RegionKind::Table,
+                    bbox: BBoxRail {
+                        tl: Rail { x: 0, y: 120 },
+                        br: Rail { x: 255, y: 255 },
+                    },
+                    reading_order: 14,
+                    text: None,
+                    cells: vec![TableCell {
+                        row: 0,
+                        col: 0,
+                        text: "Haemoglobin".to_string(),
+                        bbox: BBoxRail {
+                            tl: Rail { x: 0, y: 120 },
+                            br: Rail { x: 80, y: 140 },
+                        },
+                        confidence: 97,
+                    }],
+                    children: Vec::new(),
+                },
+            ],
+        }],
+        fields: Vec::new(),
+    };
+    let mixed_spans = spans(&mixed, 0);
+    let cell_text_leaked = mixed_spans.iter().any(|s| s.text.contains("Haemoglobin"));
+    g.run(
+        "T-DOCIR-SPANS a container descends, a figure contributes nothing, a table is not flattened",
+        mixed_spans.len() == 1
+            && mixed_spans[0].text == "the nested paragraph"
+            && mixed_spans[0].key.reading_order == 12
+            && mixed_spans[0].key.page == 3
+            && !cell_text_leaked,
+        &format!(
+            "a 3-region page (a text-less `Main` container holding one `Text` child, a \
+             `Figure`, and a `Table` with one cell) yields exactly {} span — the nested \
+             paragraph, keyed (page 3, reading_order 12). The figure adds nothing, the \
+             container adds nothing of its own, and the cell text \"Haemoglobin\" does NOT \
+             appear in any span: a table's typed (row, col) values go to the structured path, \
+             and pouring them into a token stream would destroy the structure that path \
+             exists to read",
+            mixed_spans.len()
         ),
     );
 
@@ -711,7 +949,7 @@ fn main() {
     let mut forward_rows: Vec<(String, usize, f64, usize, f64)> = Vec::new();
 
     for c in &corpora {
-        let contract = TokenizerContract::train(c.text.as_bytes(), NormRule::Identity);
+        let contract = TokenizerContract::train(&c.source, NormRule::Identity);
         let (lane, mut s) = ingest(c, &contract, &mut g);
         deepnsm_arm(c, &contract, &lane, &vocab, &posmap, &mut s, &mut g);
 
@@ -810,11 +1048,11 @@ fn main() {
 
     // ---- T-CONTRACT: the codebook law ----
     let c0 = &corpora[0];
-    let a = TokenizerContract::train(c0.text.as_bytes(), NormRule::Identity);
-    let b = TokenizerContract::train(c0.text.as_bytes(), NormRule::Identity);
-    let other = TokenizerContract::train(corpora[1].text.as_bytes(), NormRule::Identity);
-    let lower = TokenizerContract::train(c0.text.as_bytes(), NormRule::AsciiLowercase);
-    let sample = c0.text.as_bytes();
+    let a = TokenizerContract::train(&c0.source, NormRule::Identity);
+    let b = TokenizerContract::train(&c0.source, NormRule::Identity);
+    let other = TokenizerContract::train(&corpora[1].source, NormRule::Identity);
+    let lower = TokenizerContract::train(&c0.source, NormRule::AsciiLowercase);
+    let sample: &[u8] = &c0.source;
     let (ta, _) = a.try_encode(sample).expect("trained on it");
     let (tb, _) = b.try_encode(sample).expect("trained on it");
     g.run(
@@ -853,9 +1091,9 @@ fn main() {
     // an id while behaving differently on mixed-case input. That is the only
     // corpus shape on which this claim is falsifiable; a mixed-case corpus
     // makes the tables differ and the assertion passes for the wrong reason.
-    let lc = c0.text.to_ascii_lowercase();
-    let r_id = TokenizerContract::train(lc.as_bytes(), NormRule::Identity);
-    let r_lo = TokenizerContract::train(lc.as_bytes(), NormRule::AsciiLowercase);
+    let lc = c0.source.to_ascii_lowercase();
+    let r_id = TokenizerContract::train(&lc, NormRule::Identity);
+    let r_lo = TokenizerContract::train(&lc, NormRule::AsciiLowercase);
     let mixed = b"The Garden";
     let id_takes_mixed = r_id.try_encode(mixed).is_some();
     let lo_takes_mixed = r_lo.try_encode(mixed).is_some();
@@ -879,10 +1117,28 @@ fn main() {
 
     // ---- T-FRAME: token_count is authoritative, PAD is not a length ----
     let mut frame_lane = TokenLane::new();
-    let (full, _) = a.try_encode(c0.text.as_bytes()).expect("trained");
+    let (full, _) = a.try_encode(&c0.source).expect("trained");
     let exact = full.len() - (full.len() % IDS_PER_PARTICLE); // a 12-aligned run
-    let r0 = frame_lane.append(0, 0, 0, &a, &full[..exact]);
-    let r1 = frame_lane.append(0, 1, 0, &a, &full[exact..]);
+    let r0 = frame_lane.append(
+        SpanKey {
+            doc: 0,
+            page: 0,
+            reading_order: 0,
+        },
+        0,
+        &a,
+        &full[..exact],
+    );
+    let r1 = frame_lane.append(
+        SpanKey {
+            doc: 0,
+            page: 0,
+            reading_order: 1,
+        },
+        0,
+        &a,
+        &full[exact..],
+    );
     let flat = frame_lane.particles().as_flattened();
     let pad_scan = flat
         .iter()
@@ -914,13 +1170,13 @@ fn main() {
     joined.extend_from_slice(&v1.decode());
     g.run(
         "T-FRAME-ADJ adjacent receipts decode independently and concatenate exactly",
-        v0.len() == exact && v1.len() == full.len() - exact && joined == c0.text.as_bytes(),
+        v0.len() == exact && v1.len() == full.len() - exact && joined == c0.source,
         &format!(
             "receipt 0 -> {} tokens, receipt 1 -> {} tokens, and their decodes concatenate back to \
              the full {} canonical bytes with no bleed in either direction",
             v0.len(),
             v1.len(),
-            c0.text.len()
+            c0.source.len()
         ),
     );
     g.run(
@@ -1080,12 +1336,15 @@ fn main() {
     println!(
         "\nverdict: ONE receipt drove all three consumers. Tantivy indexed a receipt HANDLE and \
          never received the source; DeepNSM-v2 projected from ids alone through an unmodified \
-         library; the forward surface is a borrowed slice of the same particles. Byte offsets are \
-         DERIVED from the codebook's length table, so the receipt stores none. What is NOT settled \
-         here is stated in the report: the resident carrier is still a probe-local Vec, the OCR \
-         boundary supplies no byte offsets to attach a span to, the 8-bit vocabulary lane \
-         saturated at 75 KB, and there is no callable PoS surface anywhere — the module that \
-         held one was deliberately deleted, and the grounding cited for that deletion is \
-         itself an example binary outside this repo's dependency barrier."
+         library; the forward surface is a borrowed slice of the same particles. Byte offsets \
+         are DERIVED from the codebook's length table, so the receipt stores none — and the \
+         span population and every span's identity come from `ogar-doc-ir`, so the receipt \
+         mints nothing either. An offset is therefore REGION-LOCAL, which is what retires the \
+         old no-offsets-at-the-OCR-boundary gap. What is NOT settled: the resident carrier is \
+         still a probe-local Vec; the 8-bit vocabulary table is FULL at 255/255 on 75 KB of \
+         English; this probe builds its DocIr from text rather than from a real retina; and \
+         there is no callable PoS surface anywhere — the module that held one was deliberately \
+         deleted, and the grounding cited for that deletion is itself an example binary \
+         outside this repo's dependency barrier."
     );
 }

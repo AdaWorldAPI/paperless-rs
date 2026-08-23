@@ -56,6 +56,11 @@ repository = "https://github.com/AdaWorldAPI/paperless-rs"
 [workspace.dependencies]
 tesseract-ogar = { git = "https://github.com/AdaWorldAPI/tesseract-rs", rev = "b369a9758d642d1b7f3a02b3aca2f53497f74531" }
 ogar-vocab = { git = "https://github.com/AdaWorldAPI/OGAR", rev = "70296bec67d1a5db99dd3fa92a532ba060eb0838" }
+# The source-agnostic perceptual IR — the document layer's OWN identity and
+# span addressing. The token seam consumes it rather than minting a parallel
+# `source_id`/`span_id`. Default features only: `classview` is OFF, so this
+# edge stays serde-only and pulls no canon dependency.
+ogar-doc-ir = { git = "https://github.com/AdaWorldAPI/OGAR", rev = "70296bec67d1a5db99dd3fa92a532ba060eb0838" }
 lance-graph-contract = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "51c54faef235454401c6a7461ea05929c19f2140" }
 # The semantic consumer of the token seam. Standalone crate (its own empty
 # `[workspace]` table) inside the same checkout; only dep is the contract crate

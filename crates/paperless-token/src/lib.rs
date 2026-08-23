@@ -33,6 +33,7 @@
 #![forbid(unsafe_code)]
 
 pub mod contract;
+pub mod docir;
 pub mod forward;
 pub mod lane;
 pub mod lexical;

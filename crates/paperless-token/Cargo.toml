@@ -8,6 +8,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The document layer's IR: `DocIr` supplies the span population AND the
+# identity a receipt is keyed by. A span is a `Region`, addressed by
+# `(page.number, reading_order)`; `Region::text` is its own canonical text, so
+# a byte offset is region-local and this crate never invents a document id.
+ogar-doc-ir.workspace = true
+
 # The contract identity. Already a workspace dep for the S-2 convergence key.
 sha2.workspace = true
 

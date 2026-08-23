@@ -30,6 +30,7 @@
 //! straight into the next receipt. The probe exercises exactly that case.
 
 use crate::contract::{TokenizerContract, PAD};
+use crate::docir::SpanKey;
 
 /// Ids per particle: the 12-byte payload, one `u8` per byte.
 pub const IDS_PER_PARTICLE: usize = 12;
@@ -41,25 +42,20 @@ pub const IDS_PER_PARTICLE_U32: u32 = 12;
 /// The resident particle: the V3 content-blind 12-byte payload.
 pub type TokenParticle = [u8; IDS_PER_PARTICLE];
 
-/// A source document's identity. Opaque to this crate — supplied by intake.
-pub type SourceId = u32;
-
-/// A span within a source (a page, a paragraph, a verse, a cell).
-pub type SpanId = u32;
-
 /// What one tokenization produced, and everything needed to read it back.
 ///
 /// This is the RECEIPT. It carries no bytes and no offsets: the ids live in the
 /// lane, and offsets are a prefix sum over the contract's per-id length table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TokenStreamReceipt {
-    /// Which document.
-    pub source_id: SourceId,
-    /// Which span of it.
-    pub span_id: SpanId,
+    /// WHERE, in the document layer's own address space — never an id this
+    /// crate minted. See [`crate::docir`].
+    pub key: SpanKey,
     /// Which codebook assigned these ids. Without it they are meaningless.
     pub tokenizer_contract_id: [u8; 32],
-    /// Byte offset of the span within the source's canonical text.
+    /// Byte offset of the span within its REGION's canonical text. A whole
+    /// region is 0; the field exists because a sub-region span is lawful and
+    /// would not be.
     pub byte_from: u32,
     /// AUTHORITATIVE token count. Not derivable from padding.
     pub token_count: u32,
@@ -86,6 +82,9 @@ impl TokenStreamReceipt {
 pub struct TokenLane {
     particles: Vec<TokenParticle>,
     receipts: Vec<TokenStreamReceipt>,
+    /// `content_sha256` per document, interned once. A receipt carries a
+    /// `u16` index into this, not the hash itself.
+    docs: Vec<[u8; 32]>,
 }
 
 impl TokenLane {
@@ -93,6 +92,33 @@ impl TokenLane {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Intern a document's `content_sha256`, returning the index a
+    /// [`SpanKey`] addresses it by. Re-interning the same hash returns the
+    /// same index — which IS the S-2 dedup property, at lane scope: the same
+    /// bytes acquired twice are one document here, not two.
+    ///
+    /// # Panics
+    /// If a lane accumulates more than `u16::MAX` documents.
+    pub fn intern_document(&mut self, content_sha256: [u8; 32]) -> u16 {
+        if let Some(i) = self.docs.iter().position(|d| *d == content_sha256) {
+            return u16::try_from(i).expect("bounded by the check below");
+        }
+        self.docs.push(content_sha256);
+        u16::try_from(self.docs.len() - 1).expect("lane holds <= u16::MAX documents")
+    }
+
+    /// The `content_sha256` a receipt's key addresses.
+    #[must_use]
+    pub fn document_of(&self, r: &TokenStreamReceipt) -> Option<&[u8; 32]> {
+        self.docs.get(r.key.doc as usize)
+    }
+
+    /// Documents interned in this lane.
+    #[must_use]
+    pub fn document_len(&self) -> usize {
+        self.docs.len()
     }
 
     /// Append one tokenized span. The ids are packed 12 per particle with a PAD
@@ -104,8 +130,7 @@ impl TokenLane {
     /// mis-framed span rather than a large one.
     pub fn append(
         &mut self,
-        source_id: SourceId,
-        span_id: SpanId,
+        key: SpanKey,
         byte_from: u32,
         contract: &TokenizerContract,
         tokens: &[u8],
@@ -118,8 +143,7 @@ impl TokenLane {
         }
         let token_count = u32::try_from(tokens.len()).expect("span fits u32");
         let receipt = TokenStreamReceipt {
-            source_id,
-            span_id,
+            key,
             tokenizer_contract_id: contract.contract_id(),
             byte_from,
             token_count,
@@ -156,6 +180,7 @@ impl TokenLane {
     pub fn resident_bytes(&self) -> usize {
         self.particles.len() * IDS_PER_PARTICLE
             + self.receipts.len() * core::mem::size_of::<TokenStreamReceipt>()
+            + self.docs.len() * 32
     }
 
     /// A BORROWED view of one receipt's ids. No copy, no allocation: this is a

@@ -27,8 +27,13 @@ load-bearing: the OCR boundary hands over no byte offsets to attach a span to
 ## 1. The shape
 
 ```
-                      canonical text  (AUTHORITATIVE)
+     retina: tesseract-rs (pixels) │ spider-rs (DOM)
                              │
+                             ▼
+              ogar_doc_ir::DocIr   (AUTHORITATIVE)
+        content_sha256 · pages · regions · reading_order
+                             │
+                             │  a span IS a Region; its text is Region::text
                              │  exactly one pass per span
                              ▼
                    versioned BPE contract
@@ -57,6 +62,7 @@ shared table.
 
 | layer | owns | never |
 |---|---|---|
+| `docir` | the span population, read from `ogar-doc-ir` | mints an identity |
 | `contract` | the codebook and its identity | reads the lane |
 | `lane` | resident particles + framing | owns text |
 | `lexical` | the DeepNSM projection | reads the source |
@@ -65,6 +71,47 @@ shared table.
 
 Each "never" is proven by a gate, not asserted — §8 lists which disable turns
 each one red.
+
+## 1b. The identity is the document layer's, not this crate's
+
+An earlier cut of this crate minted `source_id: u32` and `span_id: u32`. That
+was a second population wearing the document layer's job, and `ogar-doc-ir`
+already answers all three questions a receipt has to ask:
+
+| the receipt needs | `ogar-doc-ir` supplies |
+|---|---|
+| WHICH document | `DocIr::content_sha256` — sha256 of the ORIGINAL bytes |
+| WHICH span | a `Region`, addressed by `(DocPage::number, Region::reading_order)` |
+| the span's text | `Region::text` — each region owns its own canonical text |
+
+Three consequences, and the second is the one that removes a gap this report
+previously carried:
+
+- **`content_sha256` is a PER-ACQUISITION dedup key, not a cross-retina
+  identity.** The crate's own docs correct its plan's first sketch on exactly
+  this point: a scan and an HTML page of the same invoice have different bytes
+  and therefore different hashes. For a *tokenization* receipt that is the
+  right reading — you tokenize bytes, so different bytes are a different
+  tokenization. Cross-retina convergence is a facts question
+  (`converges_on_facts`) and is not this seam's business.
+- **Byte offsets are REGION-LOCAL, so the "no offsets at the OCR boundary" gap
+  largely dissolves.** The boundary supplies no PAGE-wide offset and does not
+  need to: the region owns its text, and `ogar-from-docv1::region_text` is
+  where tesseract's `leading_space`-aware join already happens.
+- **The seam is source-agnostic for free.** `docir.rs` contains no line that
+  knows which retina produced the IR, so a crawled page presents the same span
+  population as a scan.
+
+The receipt interns the 32-byte hash **once per document** and carries a `u16`
+index. At these span sizes a receipt is already about a third of the resident
+bytes; stamping the hash on every one would have more than doubled that for no
+addressing gain.
+
+Two things `docir::spans` deliberately does NOT do, both gated: a `Figure`
+contributes nothing (it has no text), and a `Table`'s cells are **not**
+flattened into the token stream — a cell is typed `(row, col)` data the
+structured path consumes, and pouring it into text destroys exactly the
+structure that path exists to read.
 
 ## 2. What was measured
 
@@ -77,15 +124,24 @@ Adventures in Wonderland*, carried from `tantivy/benches/alice.txt`.
 
 | corpus | bytes | spans | tokens | ratio | uniq ids | particles | resident B | particles/span p50/p95/max | continuation |
 |---|---|---|---|---|---|---|---|---|---|
-| kjv-genesis-scene | 1 126 | 8 | 354 | 3.18× | 137 | 32 | 832 | 4 / 8 / 8 | 87.5 % |
-| alice-paragraphs | 75 514 | 300 | 37 149 | 2.03× | 247 | 3 231 | 55 572 | 8 / 30 / 43 | 100 % |
+| kjv-genesis-scene | 1 125 | 8 | 352 | 3.20× | 135 | 32 | 864 | 4 / 8 / 8 | 87.5 % |
+| alice-paragraphs | 75 513 | 300 | 36 994 | 2.04× | 245 | 3 214 | 55 400 | 8 / 30 / 43 | 100 % |
 
 Encode cost, in #1012's honest unit (merge-table probes, never wall time):
-86 640 and 7 929 358.
+85 748 and 7 879 322.
 
-**The resident lane is ~74 % of the source text, not a fraction of it.** For
-Alice the particles alone are 38 772 B (51 % of source) and the receipts add
-16 800 B. At these span sizes the FRAMING, not the payload, is where the bytes
+The `uniq` column is the number of distinct ids that APPEAR in the lane, and
+that is not the vocabulary size — a distinction worth stating because an
+earlier draft of this report conflated them. The trained table is **full at
+255 of 255** on Alice (and still full on the whole 170 KB file); 245 of those
+ids occur. On the KJV fixture the table is **180 of 255** — there the CORPUS,
+not the cap, set the size, which is what #1016's own record of the fixture
+says. The two corpora sit on opposite sides of that line, and that is the
+interesting fact rather than either number alone.
+
+**The resident lane is ~73 % of the source text, not a fraction of it.** For
+Alice the particles alone are 38 568 B (51 % of source), the 300 receipts add
+16 800 B, and the interned document hash adds 32. At these span sizes the FRAMING, not the payload, is where the bytes
 go: a 56-byte receipt against 12-byte particles is 30 % of the resident total
 at paragraph granularity and 54 % at verse granularity. #1012 could not see
 this — it had no receipt.
@@ -243,9 +299,12 @@ fixture-scale `[u8;12]` result?** Five things, all now specified and gated:
   truth.
 - a **per-id surface table**, which is what lets every downstream projection
   run without the source.
-- **span identity** `(source_id, span_id, byte_from)` — and the measured
-  consequence that at these span sizes the receipt is 30–54 % of resident
-  bytes, so the receipt's own layout matters more than the particle's.
+- **span identity — taken from `ogar-doc-ir`, not minted**: `content_sha256`
+  interned once per document, plus `(page, reading_order)` per span, plus a
+  region-local `byte_from`. The measured consequence is that at these span
+  sizes the receipt is ~30 % of resident bytes, so the receipt's own layout
+  matters more than the particle's — which is also why the hash is interned
+  rather than stamped per span.
 
 **5. Does any online step still require Polars?** No — and the honest form of
 that answer is that it never did. A sweep of nine checkouts found **zero**
@@ -266,10 +325,11 @@ DataFrame (G8).
 
 **6. What remains authoritative?** In order, and the order is enforced rather
 than described:
-`canonical source text` (authoritative) → `contract` (authoritative for what an
-id MEANS) → `receipt + lane` (exact and reconstructible; byte-identical decode
-on both corpora) → `Tantivy index` (derived, deletable) → `DeepNSM projection`
-(derived, deletable) → `model state` (ephemeral, owns nothing).
+`ogar_doc_ir::DocIr` (authoritative — it owns the document's identity, its span
+population and each span's canonical text) → `contract` (authoritative for what
+an id MEANS) → `receipt + lane` (exact and reconstructible; byte-identical
+decode on both corpora) → `Tantivy index` (derived, deletable) → `DeepNSM
+projection` (derived, deletable) → `model state` (ephemeral, owns nothing).
 
 **7. Can Tantivy be deleted and rebuilt without semantic loss?** Yes. It holds
 terms and positions derived from the lane, stores a handle rather than text,
@@ -360,15 +420,15 @@ decision needs and did not have.
 
 ## 7. The named gaps
 
-**G1 — the OCR boundary supplies no byte offsets, and this is the one that
-blocks real documents.** `doc.v1` carries `bbox`, `conf`, `leading_space` and a
-page-level `plain_text`, and no `offset`/`span`/`start`/`end` field on any of
-`DocWord`/`DocLine`/`DocPage`. The word→text mapping is *derivable* by replaying
-the documented join rule, but nothing stores it — so intake would have to
-re-implement a rule that lives in `tesseract-ocr/src/renderer.rs`, which is a
-second implementation of one rule and will drift. The fix belongs upstream and
-is small: emit the per-word byte offset where the join is performed, since that
-is the one place the rule exists.
+**G1 — RESOLVED by reading `ogar-doc-ir`; what remains is much smaller.** This
+report previously carried "the OCR boundary supplies no byte offsets" as the
+gap that blocked real documents. It is not one. `doc.v1` carries no page-wide
+offset, but the perceptual IR does not need one: a span is a `Region` and
+`Region::text` is its own canonical text, so an offset is region-local and
+`ogar-from-docv1::region_text` is where the `leading_space`-aware join already
+lives. What actually remains: a SUB-region span (half a paragraph) needs a
+non-zero `byte_from`, which the receipt already carries and no producer yet
+emits.
 
 **G2 — no resident SoA carrier.** The lane is a probe-local `Vec`. Lawful
 options: implement `SoaEnvelope`, or mint a new `ValueTenant` (16 variants
@@ -445,6 +505,11 @@ A gate nobody has tried to break is not evidence.
 | every lexical unit claims a single-token span | `T-DEEPNSM-CARD` |
 | the PoS-blind control keeps the real tags | `T-DEEPNSM-FSM` |
 | build the phrase from receipt 1, assert receipt 0 | `T-TANTIVY-PHRASE` |
+| `spans()` renumbers by position instead of reading `reading_order` | `T-DOCIR-KEY` |
+| `intern_document` never dedups | `T-DOCIR-KEY` |
+| the IR hashes something other than the source bytes | `T-DOCIR` |
+| `spans()` flattens table cells into the token stream | `T-DOCIR-SPANS` |
+| a text-less container emits an empty span | `T-DOCIR-SPANS` |
 
 The last four exist because an independent vacuity audit of the finished probe
 found five holes, and all five were real:
@@ -467,8 +532,17 @@ found five holes, and all five were real:
   `char::is_whitespace`. Real divergence, unexercised here — now BOUNDED by
   measurement (G9) rather than by hope.
 
-**Two of the disables were themselves wrong first, and that is the part worth
-keeping.** (a) A first attempt at the framing disable replaced the
+**Three of the disables were themselves wrong first, and that is the part worth
+keeping.** The third is from the `ogar-doc-ir` re-cut: the first version of
+`T-DOCIR-KEY` compared each receipt's key against the SAME `spans()` call it
+was validating — an implementation checked against itself, which stayed green
+when `spans()` was changed to renumber by position. It now walks the `DocIr`
+independently, and the fixture's `reading_order` is deliberately `2i+1` rather
+than the positional index, so "reads the field" and "renumbers by position" are
+distinguishable at all. A fourth disable (flattening table cells) initially
+found nothing for a different reason — neither text corpus contains a table or
+a figure, so no fixture could express it. That is a coverage gap, not a sound
+gate, and it was closed by building a three-region page that has both. (a) A first attempt at the framing disable replaced the
 `token_count` trim with a PAD scan *inside the receipt's own particle range* and
 stayed green — correctly, because within a bounded run a scan for a RESERVED id
 is exact. The gate's prose had over-claimed; it now states both lawful framings
@@ -490,8 +564,10 @@ proven otherwise.
 1. **G6 — the paged vocabulary.** Does `hi:lo` as `(page, id)` extend the
    alphabet without widening a lane, and what does compression do at 1 MB?
    Until measured, no scale claim.
-2. **G1 — offsets at the OCR boundary.** One upstream change, small, and it is
-   what makes the seam usable on scanned documents rather than on text files.
+2. **A real retina.** This probe builds its `DocIr` from text; the next one
+   should take `ogar-from-docv1`'s output on an actual scan and a
+   `spider_doc_ir` crawl of the same content, and check that both present the
+   same span population shape to the tokenizer.
 3. **G2 — the lawful lane.** `SoaEnvelope` or a tenant, with the receipt column
    layout designed against the measured 30–54 % framing overhead.
 4. **A real forward arm.** The seam supplies the input; whether representation
