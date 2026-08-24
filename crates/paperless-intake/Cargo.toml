@@ -9,4 +9,60 @@ repository.workspace = true
 
 [dependencies]
 paperless-kv = { path = "../paperless-kv" }
-tesseract-ogar.workspace = true
+
+# The one shape both retinas produce.
+ogar-doc-ir.workspace = true
+
+# The PIXEL retina's adapter. serde-only, and it does NOT pull tesseract: a
+# caller holding doc.v1 from anywhere converts with no OCR dependency.
+ogar-from-docv1.workspace = true
+
+# The DOM retina. OPTIONAL and OFF by default — not by preference but because
+# it does not currently compile: see the `dom` feature below.
+spider_doc_ir = { workspace = true, optional = true }
+
+# Running the pixel retina IN-PROCESS is optional. Default OFF: the doc.v1 leg
+# converts JSON from any producer without an OCR dependency at all, and pulling
+# the recognizer (and ndarray under it) into every consumer that only needs to
+# ingest a web page would be a real cost for nothing.
+tesseract-ogar = { workspace = true, optional = true }
+
+[features]
+default = []
+
+# Run the pixel retina IN-PROCESS. Off by default: pulling the recognizer (and
+# `ndarray` beneath it) into a consumer that only converts doc.v1 is a real
+# cost for nothing.
+ocr = ["dep:tesseract-ogar"]
+
+# The DOM retina (`spider_doc_ir::harvest`). OFF because it is BROKEN UPSTREAM,
+# not because it is unwanted:
+#
+#   error[E0063]: missing field `confidence` in initializer of `TableCell`
+#     --> spider_doc_ir/src/lib.rs:145
+#
+# `spider_doc_ir` was merged 2026-07-14 and has not been touched since;
+# `ogar-doc-ir` later added `TableCell::confidence` (a fail-closed `0` default,
+# so an OCR cell of 95 and 40 reports 40 and routes to review). spider declares
+# `ogar-doc-ir = { branch = "main" }`, so it broke the moment that field landed
+# — and nothing builds the pair, so nothing noticed. The fix is one line in
+# spider (`confidence: 0`, which is exactly the documented fail-closed default
+# for a producer that has no per-cell signal); this session cannot push there.
+#
+# The lesson is worth more than the fix: a floating branch dep with no CI that
+# exercises it is drift with NO detector. `ogar-doc-ir`'s closed vocabulary and
+# version marker guard the DATA shape at runtime; neither can see a struct
+# field added at compile time.
+dom = ["dep:spider_doc_ir"]
+
+[dev-dependencies]
+# The tests construct a `DocumentGuid`, which wraps a `FacetCascade`.
+lance-graph-contract.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

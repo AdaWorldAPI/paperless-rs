@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/paperless-kv", "crates/paperless-intake"]
+members = ["crates/paperless-kv", "crates/paperless-intake", "crates/paperless-token"]
 
 [workspace.package]
 version = "0.0.1"
@@ -23,7 +23,11 @@ repository = "https://github.com/AdaWorldAPI/paperless-rs"
 # forbidden: a floating ref makes a build unreproducible and silently changes
 # what a measurement measured.
 #
-#   lance-graph  @ bfc4f6d
+#   lance-graph  @ 51c54fa   (bumped 2026-08-23 from bfc4f6d: the token seam
+#                            consumes `deepnsm-v2`, which lives in the SAME repo.
+#                            Two revs of one git URL would give two copies of
+#                            `lance-graph-contract` whose types do not unify, so
+#                            the pin moves as ONE deliberate act, not per-crate.)
 #   OGAR         @ 70296be   (contains the merged ingestion spine, PR #266)
 #   tesseract-rs @ b369a97
 #   ndarray      @ 52dc61e
@@ -52,13 +56,46 @@ repository = "https://github.com/AdaWorldAPI/paperless-rs"
 [workspace.dependencies]
 tesseract-ogar = { git = "https://github.com/AdaWorldAPI/tesseract-rs", rev = "b369a9758d642d1b7f3a02b3aca2f53497f74531" }
 ogar-vocab = { git = "https://github.com/AdaWorldAPI/OGAR", rev = "70296bec67d1a5db99dd3fa92a532ba060eb0838" }
-lance-graph-contract = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "bfc4f6db700b17943967a86f196cbd040f57a333" }
+# The source-agnostic perceptual IR — the document layer's OWN identity and
+# span addressing. The token seam consumes it rather than minting a parallel
+# `source_id`/`span_id`. Default features only: `classview` is OFF, so this
+# edge stays serde-only and pulls no canon dependency.
+# ⚠ DELIBERATE DEVIATION from this file's own "branch refs are forbidden" rule,
+# for the doc-IR pair ONLY. `spider_doc_ir` declares
+# `ogar-doc-ir = { branch = "main" }`, and cargo does NOT unify a `branch` and a
+# `rev` source even when both resolve to the SAME commit (measured: two
+# `ogar-doc-ir` entries in Cargo.lock, identical `#719471db` suffix). Two
+# SourceIds means two `DocIr` TYPES in one binary, so `spider_doc_ir::harvest`'s
+# output could not be handed to `ogar_from_docv1`'s consumer — which defeats the
+# entire point of a source-agnostic IR.
+#
+# Floating is the lesser evil here, and the drift protection is STRUCTURAL
+# rather than a pin: `ogar_doc_ir::from_json` hard-fails on an off-vocabulary
+# `RegionKind` or a `DOC_IR_VERSION` that is not `doc.v1`. That gate catches
+# SEMANTIC drift, which a rev pin cannot. spider floats for the same reason and
+# says so in its own manifest.
+ogar-doc-ir = { git = "https://github.com/AdaWorldAPI/OGAR", branch = "main" }
+# The PIXEL retina's adapter: tesseract's `doc.v1` JSON -> `DocIr`. serde-only,
+# so this edge costs nothing; note it does NOT pull tesseract itself — a caller
+# that already has doc.v1 from anywhere converts without an OCR dependency.
+ogar-from-docv1 = { git = "https://github.com/AdaWorldAPI/OGAR", branch = "main" }
+# The DOM retina: HTML -> `DocIr`, one function, `lol_html` + `sha2`. Merged in
+# the spider fork; a web page and a scan therefore land as ONE shape.
+spider_doc_ir = { git = "https://github.com/AdaWorldAPI/spider", branch = "main" }
+lance-graph-contract = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "51c54faef235454401c6a7461ea05929c19f2140" }
+# The semantic consumer of the token seam. Standalone crate (its own empty
+# `[workspace]` table) inside the same checkout; only dep is the contract crate
+# above, resolved by a path that stays INSIDE the checkout, so it needs no patch.
+deepnsm-v2 = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "51c54faef235454401c6a7461ea05929c19f2140" }
+# The lexical index. Fork per P0; default features off (in-RAM probe index, and
+# the default set drags zstd-sys, a C build).
+tantivy = { git = "https://github.com/AdaWorldAPI/tantivy", rev = "5fc9fccb613c9838cf7fde77f73dc4afa3216375", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 
 [patch."https://github.com/AdaWorldAPI/tesseract-rs"]
 ogar-vocab = { git = "https://github.com/AdaWorldAPI/OGAR", rev = "70296bec67d1a5db99dd3fa92a532ba060eb0838" }
-lance-graph-contract = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "bfc4f6db700b17943967a86f196cbd040f57a333" }
-deepnsm = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "bfc4f6db700b17943967a86f196cbd040f57a333" }
+lance-graph-contract = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "51c54faef235454401c6a7461ea05929c19f2140" }
+deepnsm = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "51c54faef235454401c6a7461ea05929c19f2140" }
 ndarray = { git = "https://github.com/AdaWorldAPI/ndarray", rev = "52dc61ed2284ab2ce2fdde5143e5d3cd618aefaf" }
 
 [patch."https://github.com/AdaWorldAPI/lance-graph"]
