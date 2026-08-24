@@ -60,7 +60,28 @@ ogar-vocab = { git = "https://github.com/AdaWorldAPI/OGAR", rev = "70296bec67d1a
 # span addressing. The token seam consumes it rather than minting a parallel
 # `source_id`/`span_id`. Default features only: `classview` is OFF, so this
 # edge stays serde-only and pulls no canon dependency.
-ogar-doc-ir = { git = "https://github.com/AdaWorldAPI/OGAR", rev = "70296bec67d1a5db99dd3fa92a532ba060eb0838" }
+# ⚠ DELIBERATE DEVIATION from this file's own "branch refs are forbidden" rule,
+# for the doc-IR pair ONLY. `spider_doc_ir` declares
+# `ogar-doc-ir = { branch = "main" }`, and cargo does NOT unify a `branch` and a
+# `rev` source even when both resolve to the SAME commit (measured: two
+# `ogar-doc-ir` entries in Cargo.lock, identical `#719471db` suffix). Two
+# SourceIds means two `DocIr` TYPES in one binary, so `spider_doc_ir::harvest`'s
+# output could not be handed to `ogar_from_docv1`'s consumer — which defeats the
+# entire point of a source-agnostic IR.
+#
+# Floating is the lesser evil here, and the drift protection is STRUCTURAL
+# rather than a pin: `ogar_doc_ir::from_json` hard-fails on an off-vocabulary
+# `RegionKind` or a `DOC_IR_VERSION` that is not `doc.v1`. That gate catches
+# SEMANTIC drift, which a rev pin cannot. spider floats for the same reason and
+# says so in its own manifest.
+ogar-doc-ir = { git = "https://github.com/AdaWorldAPI/OGAR", branch = "main" }
+# The PIXEL retina's adapter: tesseract's `doc.v1` JSON -> `DocIr`. serde-only,
+# so this edge costs nothing; note it does NOT pull tesseract itself — a caller
+# that already has doc.v1 from anywhere converts without an OCR dependency.
+ogar-from-docv1 = { git = "https://github.com/AdaWorldAPI/OGAR", branch = "main" }
+# The DOM retina: HTML -> `DocIr`, one function, `lol_html` + `sha2`. Merged in
+# the spider fork; a web page and a scan therefore land as ONE shape.
+spider_doc_ir = { git = "https://github.com/AdaWorldAPI/spider", branch = "main" }
 lance-graph-contract = { git = "https://github.com/AdaWorldAPI/lance-graph", rev = "51c54faef235454401c6a7461ea05929c19f2140" }
 # The semantic consumer of the token seam. Standalone crate (its own empty
 # `[workspace]` table) inside the same checkout; only dep is the contract crate
