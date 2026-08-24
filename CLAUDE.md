@@ -117,8 +117,11 @@ docs/
   `surreal_container::open` returns `Err(Blocked)` and every module is a
   `// TODO task NN` header). That is also what `W4-8` prescribes: *"No storage
   backend chosen (KV blob is the consumer's)."*
-- `paperless-token`: a **probe**, and it is honest about being one — 37 gates,
-  9 disable-runs verified red-then-green, two committed real corpora. It proves
+- `paperless-token`: a **probe**, and it is honest about being one — 41 gates
+  (`cargo run -p paperless-token --example probe_token_seam --release`; the
+  count is printed by the run itself, not hand-maintained here — re-measure
+  rather than trust this number if the probe grows), 9 disable-runs verified
+  red-then-green, two committed real corpora. It proves
   the seam (one tokenization per span; Tantivy, DeepNSM-v2 and a forward
   surface all borrowed off it; zero changes needed to either consumer crate)
   and names eight gaps that stand between it and a production carrier. The
