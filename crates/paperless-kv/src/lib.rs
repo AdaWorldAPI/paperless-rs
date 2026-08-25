@@ -55,6 +55,39 @@
 use lance_graph_contract::facet::FacetCascade;
 
 // ---------------------------------------------------------------------------
+// Hot-plug — this crate's registration against the OGAR-authoritative
+// document capability table
+// ---------------------------------------------------------------------------
+
+/// This crate's hot-plug declaration — the GENERIC pattern every consumer
+/// migrates to (operator, 2026-07-07): one const naming the classids this
+/// crate hot-plugs and the capabilities it covers. The authority
+/// (`ogar_vocab::capability_registry::resolve_hotplug`, reachable through the
+/// `lance_graph_contract::hotplug::CapabilityAuthority` socket) verifies the
+/// plug and returns BOTH the vocab rows and the action surface for exactly
+/// these classids — classid is the join key on both sides. Same pattern as
+/// `tesseract_ogar::HOT_PLUG` (`tesseract-rs/crates/tesseract-ogar/src/
+/// lib.rs`), the OCR-side precedent.
+///
+/// The consumer name is `"paperless-kv"` — the exact string
+/// `ogar_vocab::document_actions::DOCUMENT_EXPECTED_EXECUTORS` names as the
+/// expected executor (W4 5+3 council, `OGAR-DOC-W4-BUILD-SPEC.md` §W4-5
+/// §A1: "the executor lives in the assembly repo, not a new `ogar-doc`
+/// crate"). This crate covers ONLY the layout half of that surface today —
+/// the S-2 gate and the subtree keys — never the executor BODY
+/// (`persist_document`'s actual write logic is deliberately unbuilt; see the
+/// module docs above). The hot-plug const still names the full capability
+/// set the table declares, because `resolve_hotplug` requires bidirectional
+/// coverage (`Uncovered`/`Undeclared`) — a consumer that only implements a
+/// subset would need its own narrower table, and none exists yet.
+pub const HOT_PLUG: lance_graph_contract::hotplug::HotPlug =
+    lance_graph_contract::hotplug::HotPlug {
+        consumer: "paperless-kv",
+        classids: ogar_vocab::document_actions::DOCUMENT_SUBJECT_CLASSIDS,
+        covered: ogar_vocab::document_actions::DOCUMENT_ACTION_NAMES,
+    };
+
+// ---------------------------------------------------------------------------
 // Trap 1 — the silent V1 fallback
 // ---------------------------------------------------------------------------
 
@@ -320,6 +353,64 @@ mod tests {
             v,
             Verdict::Novel,
             "the index must answer Novel for bytes it has not seen"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Hot-plug activation
+    // -------------------------------------------------------------------
+
+    /// The full confirmation loop, closed generically: this crate's
+    /// [`HOT_PLUG`] resolves through the authority — the hot-plugged
+    /// classid (`document`, `0x080B`) is minted and capability-bearing,
+    /// this crate is an expected executor, coverage holds both directions
+    /// — and returns BOTH the vocab row and the action surface. Any drift
+    /// is a NAMED `HotplugDrift` arm failing this test. Same shape as
+    /// `tesseract_ogar::tests::hotplug_activation_is_green`, the OCR-side
+    /// precedent this crate's `HOT_PLUG` doc comment cites.
+    #[test]
+    fn hotplug_activation_is_green() {
+        let (concepts, capabilities) = ogar_vocab::capability_registry::resolve_hotplug(
+            HOT_PLUG.consumer,
+            HOT_PLUG.classids,
+            HOT_PLUG.covered,
+        )
+        .expect("hot-plug drifted from the authoritative OGAR document table");
+        assert_eq!(
+            concepts,
+            vec![("document", 0x080Bu16)],
+            "one concept, the minted document subject"
+        );
+        assert_eq!(
+            capabilities.len(),
+            ogar_vocab::document_actions::DOCUMENT_ACTION_NAMES.len(),
+            "one capability per declared document action"
+        );
+        for name in ogar_vocab::document_actions::DOCUMENT_ACTION_NAMES {
+            assert!(
+                capabilities.contains(&(*name).to_string()),
+                "{name} must resolve as a covered capability"
+            );
+        }
+    }
+
+    /// The can-fail half (falsifiability rule): a consumer name OTHER than
+    /// the one `DOCUMENT_EXPECTED_EXECUTORS` names must be rejected, not
+    /// silently accepted — proving `hotplug_activation_is_green` above is
+    /// discriminating on the consumer string, not merely on the classid set.
+    #[test]
+    fn a_different_consumer_name_is_rejected() {
+        let result = ogar_vocab::capability_registry::resolve_hotplug(
+            "some-other-crate",
+            HOT_PLUG.classids,
+            HOT_PLUG.covered,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(ogar_vocab::capability_registry::HotplugDrift::UnexpectedConsumer(_))
+            ),
+            "an unregistered consumer name must be refused, got: {result:?}"
         );
     }
 

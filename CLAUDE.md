@@ -3,6 +3,21 @@
 Read first, every session. This repo is young; the conventions below come from
 its siblings, which paid for them.
 
+> **⊘ SUPERSEDED (2026-08-24) — this repo's own crates are a DEAD COPY.**
+> Per `tesseract-rs/CLAUDE.md` § "tesseract-paperless — document intake lands
+> here, feature-gated": the work in `crates/paperless-kv` /
+> `paperless-intake` / `paperless-token` continued and shipped as
+> `AdaWorldAPI/tesseract-rs`'s `crates/tesseract-paperless` (the gate + seam)
+> and `crates/tesseract-paperless-web` (the Railway archive: upload → S-2
+> gate → OCR → lancedb → Tantivy search → paperless-ngx-shaped UI, with SPO
+> extraction wired in). **Do not sync the two — there is nothing to sync back
+> to.** This repo's `Dockerfile` now builds and ships THAT binary (cloning
+> `tesseract-rs` + its siblings fresh) rather than this repo's own stub
+> crates, so a Railway service still pointed at this repo gets the real
+> service on its next deploy. The section below (§ Status) predates the
+> supersession; read it as history, not as the current shape of the running
+> service.
+
 ## What this is
 
 **The assembly point.** `paperless-rs` configures storage, owns the Dockerfile
