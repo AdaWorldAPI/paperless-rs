@@ -22,12 +22,17 @@ existing service.
 2. Name the service `paperless`. Its private address is then
    `paperless.railway.internal`.
 3. Add a volume mounted at `/app/data`. Without it the archive and the search
-   index are lost on every redeploy.
+   index are lost on every redeploy. **The image runs as a non-root user
+   (`appuser`, uid 10001), and a mounted volume does not keep the image's
+   `chown`**, so the process may be unable to write there. Set
+   `RAILWAY_RUN_UID=0` (Railway's documented setting for this case); the
+   process then runs as root. The P0 check below proves writes work.
 4. Service variables:
 
    | Variable | Value | Notes |
    |---|---|---|
    | `PORT` | `8080` | a fixed port, so other services can reach `paperless.railway.internal:8080` |
+   | `RAILWAY_RUN_UID` | `0` | lets the process write the mounted volume (it then runs as root) |
    | `BRAND_NAME` | `paperless-rs` | optional; unset = unbranded |
    | `BRAND_TAGLINE` | `Document intake and archive for report-rs` | optional |
    | `BRAND_ACCENT` | for example `#0f766e` | optional, `#rgb` or `#rrggbb` |
@@ -52,7 +57,7 @@ a long time. A build failing on `protoc` means the builder stage lost
 |---|---|
 | deploy logs | start lines from `tesseract-paperless-web`, no `BRAND_* ignored` line (unless a value was invalid) |
 | healthcheck | passes on `/` |
-| volume | redeploy the service; the documents uploaded before are still listed |
+| volume | the log shows no permission error for `/app/data`; after an upload and a redeploy the document is still listed |
 | from another service in the project | `curl http://paperless.railway.internal:8080/` returns the upload page with the configured name |
 
 Two caveats:
@@ -77,7 +82,9 @@ then run the same gate for paperless-rs pull requests.
 ## 4. WordCraft as the editor (P5, later)
 
 Do **not** deploy WordCraft yet. It starts after P3 (identity), because editing
-is a write. It never goes into report-rs.
+is a write, and after the archive keeps the original file: today it discards
+the uploaded bytes after hashing, so there is no `.docx` to open. It never goes
+into report-rs.
 
 When P5 starts:
 

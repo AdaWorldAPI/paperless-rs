@@ -9,9 +9,12 @@
 > **Measured against** tesseract-rs `master` at `7cbc969` (2026-10-26). That
 > is what this repo's `Dockerfile` builds: it clones each sibling's default
 > branch when `TESSERACT_RS_REF` is unset, so **a deployment built before the
-> metadata commits (`3a200c9`, `068ddd7`) shows none of the rows marked
-> *present* below.** A live service whose index page has no link to
-> `/definitions` is such a build; redeploying is enough to pick them up.
+> metadata commits (`3a200c9`, `068ddd7`) has none of the metadata features
+> below** (definitions, assignments, review, AUTO suggestions); upload, search,
+> detail and confirmed delete predate those commits. A live service whose index
+> page has no link to `/definitions` is such a build. Rebuild it from a
+> `TESSERACT_RS_REF` that contains both commits; if the ref is unchanged,
+> rebuild without the cached clone layer, because a plain redeploy can reuse it.
 >
 > **Sources.** The tesseract-rs side is read from source, each row cited. The
 > paperless-ngx side is stated from knowledge of that project's UI and was

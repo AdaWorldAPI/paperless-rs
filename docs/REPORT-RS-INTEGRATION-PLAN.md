@@ -45,7 +45,7 @@ Model: RPT-TICKET-API-1 (report-rs `src/ticket_api.rs`). report-rs is a server-s
 | What report-rs stores | the document's content hash (64 hex) and the filename it was shown; never bytes, text or OCR output |
 | Intake | `POST /api/v1/documents` (multipart file) → `{hash, duplicate, pages, low_confidence}`; a duplicate is reported, not re-archived (S-2) |
 | Lookup | `GET /api/v1/documents/{hash}` → metadata; `GET /api/v1/documents?q=` → ranked hits with snippets |
-| Viewing | report-rs links to the paperless page for a hash; it never renders the document itself |
+| Viewing | report-rs links to the paperless page for a hash; it never renders the document itself. The browser must be able to reach that page: under the private-network shape it cannot resolve `paperless.railway.internal`, so the link needs an authenticated route (for example through report-rs) or waits for the public domain after §6 (open decision 5) |
 | Failure | paperless down = report-rs shows "documents unavailable"; report-rs never queues or caches documents |
 
 Two ways report-rs could reach the API, decided in §9:
@@ -93,7 +93,7 @@ What is recorded for that session:
 
 - The archive has no sign-in today, so it must not have a public domain until it does.
 - The ticket service is the precedent: it verifies the Zitadel ID token that report-rs forwards (`aud`/`azp` checked against an allow-list of client ids), and decides role and customer itself.
-- Customer separation in paperless: every archived document needs an owning customer, set at intake from the token, and every read and search filtered by it. The archive has no such column today (`tesseract_paperless::store` schema); adding it is a schema change.
+- Customer separation in paperless: access is per **customer-to-document association**, not one owner per document. Two customers can upload the same file; the dedup gate then reports the second upload as a duplicate of the same content hash, and both customers must still reach their own upload. So intake records an association (customer, hash) from the token, and every read and search is filtered by the caller's associations. The archive has no such table today (`tesseract_paperless::store` schema); adding it is a schema change.
 - report-rs adds no authority of its own when it forwards a token (RPT-TICKET-API-1).
 
 ## 7. WordCraft as the editor (later, paperless-rs only)
@@ -106,6 +106,7 @@ WordCraft (`AdaWorldAPI/wordcraft`) is a pure-Rust word processor that reads and
 | Not in report-rs | report-rs never depends on WordCraft, embeds it, or links its crates; it links to the paperless page, as for viewing |
 | Versions | an edited document is a new archived document with its own hash; the original is never overwritten (content addressing, S-2) |
 | Shape | serve the static WordCraft web build from paperless and open a document by hash; saving uploads through the same intake endpoint |
+| Prerequisite | the archive keeps the original uploaded file, retrievable by hash. Today it computes the hash and discards the bytes, so there is no `.docx` for WordCraft to open. That needs a blob store written before the document address (S-5), as its own phase |
 | Gate | starts only after §6 is done, because editing is a write |
 
 ## 8. Phases and gates
@@ -116,7 +117,8 @@ WordCraft (`AdaWorldAPI/wordcraft`) is a pure-Rust word processor that reads and
 | **P1** | `scripts/ci/validate.sh` in the image build, plus the manual workflow | a deliberately failing test fails the Railway build and nothing deploys; the green build deploys |
 | **P2** | `/healthz` and the JSON API (§3) in tesseract-paperless-web | `railway.json` health check passes; the API returns the same hash as the HTML upload for the same file; a duplicate returns `duplicate: true` |
 | **P3** | identity (§6), in its own session | no token = 401; another customer's hash = 404; a token for another client id is refused |
-| **P4** | report-rs client behind `REPORT_DOCS_API_URL` (report-rs session, after its decision) | unset = no route; set = intake from report-rs stores only the hash; paperless down = a clear message, no report-rs failure |
+| **P4** | report-rs client behind `REPORT_DOCS_API_URL` (report-rs session, after its decision) | unset = no route; set = intake from report-rs stores only the hash; paperless down = a clear message, no report-rs failure; a signed-in user follows a document link from report-rs and sees that document, and a user of another customer does not |
+| **P4b** | original-file storage: a blob store keyed by hash, written before the document row (S-5) | an uploaded `.docx` can be downloaded byte-identical by its hash; a failed blob write leaves no document row |
 | **P5** | WordCraft editor inside paperless (§7) | edit and save makes a new hash; the original still opens unchanged |
 
 ## 9. Open decisions
@@ -127,6 +129,7 @@ Record each as a Linear issue before acting on it; report-rs decisions belong in
 2. Whether the JSON API lives in tesseract-paperless-web (recommended: one binary, one source of truth) or in a paperless-rs crate in front of it.
 3. Owning customer per document: taken from the token at intake (recommended) or from a report-rs field.
 4. How long the CI gate may take inside a Railway build before tests move to the manual workflow.
+5. How a user's browser reaches a paperless document page from report-rs before P3: an authenticated route through report-rs, or no viewing until paperless has its own public, signed-in domain.
 
 ## 10. Non-goals
 

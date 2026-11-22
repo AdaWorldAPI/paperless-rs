@@ -156,8 +156,9 @@ Read from the templates and routes as they stand:
 **The single largest gap is verification.** There is no image anywhere in
 the archive UI. A person who suspects `$142` should be `14.2` has no way to
 check without leaving the system and finding the original. Both reference
-systems show the document; this one stores the raw bytes (content-addressed,
-by design) and never renders them.
+systems show the document; this one never renders it, and on master it does
+not even keep it: the content hash is computed from the bytes and the bytes
+are discarded (corrected in `PAPERLESS-NGX-PARITY.md` §0).
 
 Everything else compounds from that: attention routing is worth little if
 the thing you route someone *to* cannot be checked when they get there.
@@ -180,9 +181,10 @@ pipeline work — and what it is in render-path terms (a projected **field**,
 or an **action** by address).
 
 **1. Show the page image beside the text.** *Field.* Makes every other
-signal actionable. The raw bytes are already stored and content-addressed;
-the document node needs a field the ClassView can project as the source
-surface, and the word bboxes `doc.v1` already carries are what let a
+signal actionable. The raw bytes are **not** stored today
+(`PAPERLESS-NGX-PARITY.md` §0), so this starts with a blob store written before
+the document address (S-5); only then does the document node need a field the
+ClassView can project as the source surface, and the word bboxes `doc.v1` already carries are what let a
 highlight land on the ink rather than beside it. Without this, nothing
 below can be confirmed by the person it is shown to.
 
@@ -231,6 +233,9 @@ them.
 - **What "clean / check / wrong" means in numbers** is unmeasured. The
   thresholds are the kind of thing this workspace insists must be measured
   and pinned rather than asserted, and no fixture here supports them yet.
+- **Superseded (see `PAPERLESS-NGX-PARITY.md` §0):** a2ui-rs has since grown
+  `a2ui-server`, `a2ui-wasm` and `a2ui-paint`, as its own `CLAUDE.md` records;
+  this document has not re-checked them. The original text follows.
 - **a2ui-rs is seed-stage, and this document does not pretend otherwise.**
   `a2ui-core` is currently a re-export of the upstream frames plus one
   drift-fuse test; the server (W2) and the wasm fieldview client (W3) are
