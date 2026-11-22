@@ -118,6 +118,16 @@ ENV MODEL_DIR=/app/model
 ENV ARCHIVE_URI=/app/data/archive.lance
 ENV SEARCH_INDEX_DIR=/app/data/search_index
 ENV DEEPNSM_VOCAB_DIR=/app/word_frequency
+# Branding is optional and set on the Railway service, not here, so one image
+# serves branded and unbranded deployments alike. Unset = the unbranded archive.
+# Variables (validated by tesseract-paperless-web's `branding` module; an
+# invalid value is ignored with one log line):
+#   BRAND_NAME=paperless-rs
+#   BRAND_TAGLINE=Document intake and archive for report-rs
+#   BRAND_ACCENT=#0f766e
+#   BRAND_LOGO_URL=https://... or /path
+# A custom name adds "powered by tesseract-rs" to the upload page footer.
+# See docs/REPORT-RS-INTEGRATION-PLAN.md section 5.
 # NOTE: the listen port is intentionally NOT set here. The binary binds
 # 0.0.0.0:$PORT at runtime; Railway injects PORT itself. For a local run pass
 # `-e PORT=8080`. Do not add `ENV PORT=...` — that would shadow Railway's value.
