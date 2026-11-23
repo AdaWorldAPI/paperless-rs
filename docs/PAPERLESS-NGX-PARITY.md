@@ -218,7 +218,7 @@ and Settings stay out of the nav until they exist.
 - **Recovery (Phase 4).** S3 (Tigris) as the durable copy of originals and of
   recoverable metadata records; `/app/data` (volume `paperless-archive`, 50 GB)
   keeps LanceDB, Tantivy and a local blob cache. The commit order, recovery
-  protocol and failure modes are specified before code.
+  protocol and failure modes are specified before code: `RECOVERY.md`.
 - **Formats.** `decode.rs` accepts raster images only. Keeping originals does
   not make PDF or DOCX ingestible; that is separate intake work.
 
