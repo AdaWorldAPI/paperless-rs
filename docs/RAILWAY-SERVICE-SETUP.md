@@ -108,6 +108,7 @@ service at start instead of running it open.
 | `PAPERLESS_OIDC_ROLES` | `paperless.user` (comma-separated role keys that admit a user; exact match) | yes |
 | `PAPERLESS_SESSION_KEY` | 32 random bytes, `openssl rand -hex 32` (sealed variable) | recommended; without it every redeploy signs everyone out |
 | `PAPERLESS_OIDC_ORGS` | Zitadel organization ids; a role then counts only when granted under one of them | optional |
+| `PAPERLESS_API_CLIENTS` | client ids whose tokens are accepted as `Authorization: Bearer`, comma-separated (the delegation application, e.g. the one report-rs signs in with); unset: no bearer tokens | optional, for later integration |
 | `PAPERLESS_OIDC_CLIENT_SECRET` | only for a confidential (non-PKCE) application (sealed) | optional |
 | `PAPERLESS_OIDC_ROLES_CLAIM` / `PAPERLESS_OIDC_EXTRA_SCOPES` | defaults `urn:zitadel:iam:org:project:roles` / `urn:zitadel:iam:org:projects:roles` | optional |
 
@@ -125,6 +126,17 @@ variables, redeploy, then generate the domain. The deploy log shows
 | `POST /upload` without a session (curl) | `401` |
 | redeploy with `PAPERLESS_SESSION_KEY` set | still signed in |
 | `/healthz` | `ok` without a session |
+
+**Delegation (for the later report-rs integration).** A service that calls the
+archive on a user's behalf sends that user's token as `Authorization: Bearer`,
+the pattern zammad-ticket uses with `TICKET_API_CLIENTS`. The token is accepted
+when it is addressed to a client in `PAPERLESS_API_CLIENTS`, carries one of
+`PAPERLESS_OIDC_ROLES`, and passes the same signature, issuer and expiry checks;
+it creates no session. A request with an `Authorization` header is never
+redirected: a bad token is a `401`. The delegating application must grant the
+same role keys (put it in the project that holds `paperless.user`, or grant that
+project to the application's project). Nothing in report-rs changes until that
+integration.
 
 **Not covered yet:** every admitted user sees every document. Separation by
 customer (plan §6) is still to do.
