@@ -248,7 +248,7 @@ Durability and authentication come before more UI.
 | A2 | Shared Askama shell; Dashboard, Inbox, Documents, per-kind definition entries; existing routes unchanged | tesseract-rs |
 | B | Original-file store, download route, S-5 order, failure injection | tesseract-rs |
 | C | S3 durable copy, boot verification and hydration, index rebuild | tesseract-rs (+ shared store crate) |
-| T | Customer separation: an owner (tenant) per document, set at intake, and a per-document access check on every read, list, search, download and action | tesseract-rs |
+| T | Customer separation by customer-to-document association, as in REPORT-RS-INTEGRATION-PLAN.md §6: intake records a `(customer, hash)` association from the caller's token (a duplicate upload adds an association, never a second document); every read, list, search, download and action is filtered by the caller's associations. A schema change: the archive has no such table today | tesseract-rs |
 | D | A2UI vertical slice on the document list or detail, same view model and authorization as Askama | tesseract-rs + a2ui-rs |
 | E | Filters, batch metadata, review-and-next, WordCraft readiness (DOCX contract first) | tesseract-rs |
 
@@ -270,9 +270,10 @@ Durability and authentication come before more UI.
 - **C:** restart and redeploy keep originals, metadata and search; an empty
   volume rehydrates from S3; S3 down gives the specified degraded or fail-closed
   answer; a corrupted search index rebuilds deterministically.
-- **T:** a request for another tenant's document, by detail, list, search,
-  download or action, neither returns it nor reveals that it exists; this runs
-  after T, never before.
+- **T:** two customers upload identical bytes: one document, two associations,
+  and each customer reaches it; a customer without an association gets nothing
+  for it by detail, list, search, download or action, and nothing reveals that
+  it exists; this runs after T, never before.
 - **D:** the Askama page and the A2UI frame for one document carry the same
   fields; a field outside the role mask is absent from the frame; an action
   without authorization is refused on the server.
