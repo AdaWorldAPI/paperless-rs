@@ -12,8 +12,8 @@ existing service.
   is on `master`.
 - Without the `PAPERLESS_OIDC_*` variables the archive has **no sign-in**:
   anyone who can reach it can read and delete documents, and the log says so at
-  start. Generate a public domain only after sign-in is configured and checked
-  (§2a). Sign-in needs tesseract-rs with the `auth` module (tesseract-rs #112) on
+  start. Generate a public domain only after an image with sign-in (tesseract-rs
+  #112) is deployed with the variables set, following the order in §2a. Sign-in needs tesseract-rs with the `auth` module (tesseract-rs #112) on
   its default branch.
 
 ## 1. Create the service (P0)
@@ -44,9 +44,11 @@ existing service.
    Dockerfile also accepts optional build arguments `TESSERACT_RS_REF`,
    `LANCE_GRAPH_REF`, `NDARRAY_REF` and `OGAR_REF` to reproduce a specific
    build; leave them unset normally.
-5. Settings → Deploy → healthcheck path `/healthz` (answers `ok` without a
-   session), and a healthcheck timeout of a few minutes: the first
-   start loads the OCR model and opens the archive.
+5. Settings → Deploy → healthcheck path `/` while the image predates
+   tesseract-rs #112; switch it to `/healthz` (answers `ok` without a session)
+   once a build that includes #112 is deployed, and before turning sign-in on,
+   because `/` then redirects to sign-in. Healthcheck timeout: a few minutes,
+   the first start loads the OCR model and opens the archive.
 6. Settings → Networking: **do not generate a public domain** until §2a is
    done.
 
@@ -112,9 +114,25 @@ service at start instead of running it open.
 | `PAPERLESS_OIDC_CLIENT_SECRET` | only for a confidential (non-PKCE) application (sealed) | optional |
 | `PAPERLESS_OIDC_ROLES_CLAIM` / `PAPERLESS_OIDC_EXTRA_SCOPES` | defaults `urn:zitadel:iam:org:project:roles` / `urn:zitadel:iam:org:projects:roles` | optional |
 
-**Order:** create the Zitadel application with the domain you will use, set the
-variables, redeploy, then generate the domain. The deploy log shows
-`sign-in via https://login.msgraph.de (client …), roles [paperless.user]`.
+**Order.** The archive must never be public while it is open, and a
+Railway-generated hostname only exists once it is generated. So turn sign-in on
+first with a placeholder callback, then add the domain:
+
+1. Make sure the deployed image includes tesseract-rs #112. The Dockerfile clones
+   tesseract-rs's default branch, but Railway may reuse a cached clone layer:
+   redeploy with the build cache disabled (or set `TESSERACT_RS_REF` to the merge
+   commit) after #112 merges. The healthcheck path is `/healthz` from here on.
+2. Set all `PAPERLESS_OIDC_*` variables and `PAPERLESS_SESSION_KEY`, with
+   `PAPERLESS_OIDC_REDIRECT_URL=https://placeholder.invalid/auth/callback`, and
+   redeploy. Check the deploy log for
+   `sign-in via https://login.msgraph.de (client …), roles [paperless.user]`.
+   Every page now requires sign-in; nobody can sign in yet, and nothing is open.
+3. Generate the public domain (or attach a custom one). Confirm from outside that
+   `curl -sI https://<domain>/documents` answers `303` to `/auth/login…` and
+   `curl -s -X POST https://<domain>/upload` answers `401`.
+4. Put `https://<domain>/auth/callback` into the Zitadel application's redirect
+   URIs and into `PAPERLESS_OIDC_REDIRECT_URL`, and redeploy.
+5. Sign in as a user holding `paperless.user` (checks below).
 
 **Checks:**
 
