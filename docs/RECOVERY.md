@@ -135,10 +135,13 @@ one.
 4. Metadata snapshot.
 
 The record goes before the original, so a failure leaves an unused original
-in S3, never a record whose original is missing. Steps 2 to 4 run in the
-background after step 1, so the delete answers without waiting for S3. Unlike a
-copy, an S3 delete waits for a free slot instead of being dropped: the
-replicator never deletes, so a dropped delete would leave the document in S3.
+in S3, never a record whose original is missing. Right after step 1 the delete
+writes an intent, an empty file `<BLOB_DIR>/.s3-deletes/<sha256>`, and answers;
+steps 2 to 4 run in the background if a slot is free. The intent is removed only
+when the S3 delete succeeds. Every replicator pass (§5) retries the pending
+intents, so a failed S3 delete or a restart in between does not lose it. An
+intent for a document that is local again (uploaded again after the delete) is
+dropped without touching S3, because the new upload's copy owns those keys.
 
 **A deleted document never stays in S3.** A copy (the one after an upload and
 every replicator copy) uses the per-document lock a delete holds, but only for
@@ -148,7 +151,10 @@ upload or delete of the same document:
 1. Under the lock, read the row. A document already deleted is not copied.
 2. Without the lock, upload the original and the record.
 3. Under the lock, check the row again. If a delete removed it while the copy
-   ran, the copy deletes what it just wrote, record first.
+   ran, the copy deletes what it just wrote, record first. If the document was
+   deleted and uploaded again meanwhile (same bytes, new name or upload time),
+   the record just written is the old one, so the copy starts over from the new
+   row, at most three times.
 
 If that last delete fails, the record stays in S3 and is logged with the hash,
 the same outcome as a failed S3 delete.
@@ -157,6 +163,7 @@ the same outcome as a failed S3 delete.
 
 At start (after any restore) and every 15 minutes, the replicator:
 
+- retries every pending S3 delete intent (§4);
 - lists `documents/` and `originals/`, and copies every local document that
   has no record, or has a local original that S3 does not hold (an original
   attached after the document was copied): its original (if any) first, then
@@ -170,7 +177,8 @@ trade: an automatic cleanup that treats "missing locally" as "deleted" would
 erase the S3 copy exactly when the local copy is damaged.
 
 The dashboard shows about how many documents are not yet fully in S3 (no
-record, or an original missing), so a stuck copy is visible. The count is an
+record, or an original missing) plus pending S3 deletes, so a stuck copy or
+delete is visible. The count is an
 estimate: the S3 listing and the local list are read one after the other, so a
 copy that lands in between can be counted as missing until the next pass.
 
@@ -236,7 +244,7 @@ deliberately given up.
 | S3 unreachable at start, local archive empty | **Refuse to start.** Starting empty would accept new uploads into an archive that does not know its own history. Railway restarts the service, and it starts once S3 answers |
 | S3 reachable and empty, local archive empty | A new archive; start normally |
 | S3 fails during an upload | The upload succeeds locally; the replicator copies it later |
-| S3 fails during a delete | The local delete stands; the S3 objects remain and are listed in the log (§5) |
+| S3 fails during a delete | The local delete stands; its intent file stays and the replicator retries the S3 delete on every pass, also after a restart (§4) |
 | Restore interrupted | The marker stays; the next start continues |
 | Search index unreadable (corrupt files) | Wiped and rebuilt from the rows at start, as a schema mismatch already is |
 | Original in S3 does not match its hash | That document is restored without an original, and logged |
