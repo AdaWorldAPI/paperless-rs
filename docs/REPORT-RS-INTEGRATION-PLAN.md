@@ -26,12 +26,12 @@ The direction of dependency stays as this repository's CLAUDE.md states it: sett
 | Railway image | ships, wraps the binary, volume at `/app/data` for archive + index | this repo `Dockerfile` |
 | Optional branding | `BRAND_NAME`, `BRAND_TAGLINE`, `BRAND_ACCENT`, `BRAND_LOGO_URL`; unset = unbranded | tesseract-rs `crates/tesseract-paperless-web/src/branding.rs` (tesseract-rs #110) |
 | JSON API | **missing**: every route is an HTML page or a form post | — |
-| Health route | **missing**: no `/healthz` (report-rs's `railway.json` uses one) | — |
-| Authentication | **missing**: the archive has no sign-in; anyone who reaches it can read and delete | — |
+| Health route | `/healthz`, answers `ok` without a session | tesseract-rs `crates/tesseract-paperless-web/src/routes.rs` |
+| Authentication | sign-in through `ogar-oidc` / `ogar-auth` against the existing Zitadel when `PAPERLESS_OIDC_ISSUER` is set (allow-listed project roles); off otherwise. No separation by customer yet | tesseract-rs `crates/tesseract-paperless-web/src/auth.rs`; setup in [RAILWAY-SERVICE-SETUP.md](RAILWAY-SERVICE-SETUP.md) §2a |
 | CI for the image | **missing**: the Dockerfile builds without running any test | this repo `Dockerfile` |
 | report-rs client | **missing**, by design until §9 decides | — |
 
-The missing authentication decides the first deployment shape: until §6 is done, the service gets **no public domain** and is reachable only on Railway's private network.
+Without the sign-in variables the service gets **no public domain** and stays on Railway's private network. With sign-in configured it may get a public domain; every signed-in user then sees every document until the customer separation in §6 lands.
 
 ## 3. Integration seam with report-rs
 
@@ -91,7 +91,7 @@ Unset = the unbranded archive. A custom name adds "powered by tesseract-rs" to t
 
 What is recorded for that session:
 
-- The archive has no sign-in today, so it must not have a public domain until it does.
+- Browser sign-in exists (RAILWAY-SERVICE-SETUP.md §2a): authorization code + PKCE, ID token verified by `ogar-oidc`, login established by `ogar-auth`, admission by allow-listed project roles. What remains for this section is the API side (verifying a token report-rs forwards) and the customer separation below.
 - The ticket service is the precedent: it verifies the Zitadel ID token that report-rs forwards (`aud`/`azp` checked against an allow-list of client ids), and decides role and customer itself.
 - Customer separation in paperless: access is per **customer-to-document association**, not one owner per document. Two customers can upload the same file; the dedup gate then reports the second upload as a duplicate of the same content hash, and both customers must still reach their own upload. So intake records an association (customer, hash) from the token, and every read and search is filtered by the caller's associations. The archive has no such table today (`tesseract_paperless::store` schema); adding it is a schema change.
 - report-rs adds no authority of its own when it forwards a token (RPT-TICKET-API-1).
