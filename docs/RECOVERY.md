@@ -25,7 +25,7 @@ so report-rs's buckets and keys can never be picked up by accident.
 
 | Variable | Meaning |
 |---|---|
-| `PAPERLESS_S3_ENDPOINT` | `https://…` endpoint, path-style (Tigris: `https://fly.storage.tigris.dev`) |
+| `PAPERLESS_S3_ENDPOINT` | `https://host[:port]` origin, no path, path-style requests (Tigris: `https://fly.storage.tigris.dev`) |
 | `PAPERLESS_S3_BUCKET` | bucket name |
 | `PAPERLESS_S3_ACCESS_KEY_ID` | access key (sealed) |
 | `PAPERLESS_S3_SECRET_ACCESS_KEY` | secret (sealed) |
@@ -231,9 +231,17 @@ starting.
 cannot keep those documents' assignments and reviews (start-up reconciliation
 removes rows whose document is missing), so while the hold file exists the
 service does not replace `metadata/current.json`; the dashboard shows the
-snapshot upload failing with the reason. Remove the file once the damaged
-records are repaired (then restore again to bring their metadata back) or
-deliberately given up.
+snapshot upload failing with the reason.
+
+Every start with a hold file retries the held documents. This is a restore over
+the live archive: it restores only documents missing locally and imports only
+the held documents' assignments and reviews from the held snapshot, so metadata
+changed locally in the meantime is kept. Documents whose records are repaired
+in S3 come back with their metadata; the hold file is rewritten with whatever
+is still damaged, or removed when nothing is. A failed retry is logged and
+never stops the start. Remove the hold file by hand only to give those
+documents up. The marker records which kind of restore is running, so an
+interrupted retry resumes as a retry.
 
 ## 7. Failure modes
 
