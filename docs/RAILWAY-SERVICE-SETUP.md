@@ -207,9 +207,11 @@ service then keeps a copy of every original, every document record and the
 metadata in an S3 bucket, and restores an empty volume from it at start.
 Protocol and failure modes: `RECOVERY.md`.
 
-Use a **bucket of its own** with its own key pair. The service reads only the
-`PAPERLESS_S3_*` variables, never `AWS_*`, so report-rs's buckets stay out of
-reach even in the same project.
+Use a **bucket of its own** and a key that can reach **only that bucket**
+(a bucket-scoped access key, or a policy limited to it). The key's scope is the
+access control. That the service reads only `PAPERLESS_S3_*` and never `AWS_*`
+only stops it from picking up report-rs's credentials by accident; a key with
+account-wide rights would still reach report-rs's buckets.
 
 | Variable | Value | Required |
 |---|---|---|

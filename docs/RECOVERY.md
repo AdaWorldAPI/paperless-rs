@@ -65,7 +65,11 @@ against its own name.
 }
 ```
 
-`doc_ir_json` is the stored `DocIr`, so a restore recomputes nothing.
+`doc_ir_json` is the stored `DocIr`, so a restore recomputes nothing. The
+record has no separate MIME field: a row's MIME is the `DocIr`'s `mime`, because
+the one write path for rows (`LanceStore::put`) takes it from there for every
+ingest, the DOM leg included. Restore writes the row through the same call, so
+the restored MIME is the original one.
 `has_original` is false for a document stored before slice B. Such a document
 is restored as it is today: a row without an original.
 
@@ -169,8 +173,10 @@ documents, or a restore marker (`<BLOB_DIR>/.restore-in-progress`) is present.
    equals the key, and write it locally (slice B store); then write the row from
    the record.
 4. Read `metadata/current.json` and import definitions, assignments and reviews,
-   keeping ids. Assignments and reviews whose document was not restored are
-   dropped.
+   keeping ids. Assignments and reviews whose document is not in the S3 copy
+   are dropped. Those of a document whose record was skipped as damaged are
+   kept: otherwise the next snapshot upload would remove them from S3 too, and
+   repairing the record later could not bring them back.
 5. Remove the marker.
 6. The existing start-up `reconcile` rebuilds the search index from the
    restored rows.
@@ -205,8 +211,9 @@ starting.
 
 From `PAPERLESS-NGX-PARITY.md` §9, made concrete:
 
-- Restart and redeploy keep originals, metadata and search (volume present: no
-  S3 traffic beyond the replicator's listing).
+- Restart and redeploy keep originals, metadata and search (volume present: S3
+  traffic is the replicator's listings and one snapshot upload; no original or
+  record is written).
 - An empty volume restores from S3: every document, its original
   (byte-identical), its filename and upload time, every definition with its id,
   every assignment and review flag. Search finds the restored documents.
@@ -216,6 +223,8 @@ From `PAPERLESS-NGX-PARITY.md` §9, made concrete:
 - A corrupt search index is rebuilt and finds the same documents.
 - An interrupted restore completes on the next start.
 - A record whose original fails its hash check restores without an original.
+- A damaged record is skipped, and its document's assignments and reviews
+  survive the restore and the next snapshot.
 - The replicator never deletes from S3.
 - An older document copied without an original, then given its original by a
   re-upload whose immediate S3 copy fails: the replicator uploads the original,
