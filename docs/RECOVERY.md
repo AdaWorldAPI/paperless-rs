@@ -104,9 +104,10 @@ A record is written only after its original, so a record in S3 always has its
 original in S3. The upload answers once step 2 succeeds. Steps 3 and 4 are
 started in the background right after step 2, before search indexing, so a
 failed index write cannot leave a committed document uncopied, and the upload
-never waits for S3. At most four such copies run at once. A failure is logged
-and retried by the replicator (§5); so is a copy that never ran because the
-process stopped. A failed S3 write never fails the upload or removes the local
+never waits for S3. At most four copies and snapshot uploads run at once; one
+that finds no free slot is dropped rather than queued, and the replicator (§5)
+makes it later. A failure is logged and retried by the replicator too, as is a
+copy that never ran because the process stopped. A failed S3 write never fails the upload or removes the local
 document.
 
 **Original attached to an older document** (a re-upload of a document stored
@@ -134,13 +135,23 @@ one.
 4. Metadata snapshot.
 
 The record goes before the original, so a failure leaves an unused original
-in S3, never a record whose original is missing.
+in S3, never a record whose original is missing. Steps 2 to 4 run in the
+background after step 1, so the delete answers without waiting for S3. Unlike a
+copy, an S3 delete waits for a free slot instead of being dropped: the
+replicator never deletes, so a dropped delete would leave the document in S3.
 
-**Copy and delete of the same document never interleave.** A copy (the one
-after an upload and every replicator copy) takes the same per-document lock a
-delete holds, and reads the local row under it. A copy that waited for a delete
-finds the row gone and writes nothing, so a deleted document cannot reappear in
-S3.
+**A deleted document never stays in S3.** A copy (the one after an upload and
+every replicator copy) uses the per-document lock a delete holds, but only for
+two local checks, never while it talks to S3, so a slow S3 never holds up an
+upload or delete of the same document:
+
+1. Under the lock, read the row. A document already deleted is not copied.
+2. Without the lock, upload the original and the record.
+3. Under the lock, check the row again. If a delete removed it while the copy
+   ran, the copy deletes what it just wrote, record first.
+
+If that last delete fails, the record stays in S3 and is logged with the hash,
+the same outcome as a failed S3 delete.
 
 ## 5. Replication
 
@@ -204,6 +215,15 @@ out, and its document is restored without it. The restore continues, and the mar
 is removed at the end, so one damaged object cannot block the archive from
 starting.
 
+**A restore that skipped records holds the S3 snapshot.** It writes
+`<BLOB_DIR>/.snapshot-hold`, listing the skipped hashes. The local metadata
+cannot keep those documents' assignments and reviews (start-up reconciliation
+removes rows whose document is missing), so while the hold file exists the
+service does not replace `metadata/current.json`; the dashboard shows the
+snapshot upload failing with the reason. Remove the file once the damaged
+records are repaired (then restore again to bring their metadata back) or
+deliberately given up.
+
 ## 7. Failure modes
 
 | Situation | Behaviour |
@@ -218,6 +238,8 @@ starting.
 | Restore interrupted | The marker stays; the next start continues |
 | Search index unreadable (corrupt files) | Wiped and rebuilt from the rows at start, as a schema mismatch already is |
 | Original in S3 does not match its hash | That document is restored without an original, and logged |
+| Restore skipped damaged records | The archive starts without them; `.snapshot-hold` stops the S3 snapshot from being replaced until an operator removes it (§6) |
+| S3 slow during uploads or deletes | Requests do not wait: copies and S3 deletes run in the background, and no lock is held across S3 calls |
 | Metadata snapshot unreadable | The restore stops and the start fails, marker kept. Starting without the users' metadata would upload an empty snapshot over the damaged one |
 
 ## 8. Acceptance tests (slice C)
