@@ -187,9 +187,12 @@ documents, or a restore marker (`<BLOB_DIR>/.restore-in-progress`) is present.
    restored rows.
 
 Before importing, the restore keeps the metadata snapshot it read beside the
-marker (`<BLOB_DIR>/.restore-snapshot.json`) and removes it with the marker. A
-restore that resumes imports that same snapshot, never a newer one from S3, so
-it cannot leave rows from two different snapshots.
+marker (`<BLOB_DIR>/.restore-snapshot.json`). A restore that resumes imports
+that same snapshot, never a newer one from S3, so it cannot leave rows from two
+different snapshots. At the end the marker is removed first and the saved
+snapshot second, so the saved snapshot stays authoritative for as long as the
+marker exists; a saved snapshot found without a marker is a leftover and is
+discarded when a new restore starts.
 
 Each step is idempotent, so a restore interrupted by a crash continues on the
 next start: the marker is still there, and documents already restored are
