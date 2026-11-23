@@ -170,11 +170,12 @@ At start (after any restore) and every 15 minutes, the replicator:
   its record;
 - uploads the metadata snapshot.
 
-The replicator **never deletes** from S3. Only an explicit delete removes S3
-objects. If that S3 delete fails, the record stays in S3 and a later restore
-brings the deleted document back. That is logged, and it is the deliberate
-trade: an automatic cleanup that treats "missing locally" as "deleted" would
-erase the S3 copy exactly when the local copy is damaged.
+The replicator **never decides on its own to delete** from S3. It only carries
+out delete intents that an explicit delete wrote (§4); until an intent
+succeeds, the record stays in S3, and a restore in that window would bring the
+deleted document back. That is the deliberate trade: an automatic cleanup that
+treats "missing locally" as "deleted" would erase the S3 copy exactly when the
+local copy is damaged.
 
 The dashboard shows about how many documents are not yet fully in S3 (no
 record, or an original missing) plus pending S3 deletes, so a stuck copy or
