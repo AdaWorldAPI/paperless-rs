@@ -138,7 +138,7 @@ visible.
 ## 6. Restore
 
 **When.** At start, if S3 is configured and the local archive holds no
-documents, or a restore marker (`<data>/.restore-in-progress`) is present.
+documents, or a restore marker (`<BLOB_DIR>/.restore-in-progress`) is present.
 
 **Steps.**
 
@@ -159,8 +159,9 @@ Each step is idempotent, so a restore interrupted by a crash continues on the
 next start: the marker is still there, and documents already restored are
 skipped.
 
-**A record that fails its check** (wrong schema, original missing or with a
-different hash) is skipped and logged. The restore continues, and the marker
+**A record that fails its check** (unreadable, wrong schema or hash) is
+skipped and logged. An original that is missing or fails its hash check is left
+out, and its document is restored without it. The restore continues, and the marker
 is removed at the end, so one damaged object cannot block the archive from
 starting.
 
@@ -178,6 +179,7 @@ starting.
 | Restore interrupted | The marker stays; the next start continues |
 | Search index unreadable (corrupt files) | Wiped and rebuilt from the rows at start, as a schema mismatch already is |
 | Original in S3 does not match its hash | That document is restored without an original, and logged |
+| Metadata snapshot unreadable | The restore stops and the start fails, marker kept. Starting without the users' metadata would upload an empty snapshot over the damaged one |
 
 ## 8. Acceptance tests (slice C)
 
