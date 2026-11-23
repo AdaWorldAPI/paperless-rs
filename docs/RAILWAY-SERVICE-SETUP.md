@@ -10,9 +10,11 @@ existing service.
 - tesseract-rs PR #110 (branding) should be merged. The image clones tesseract-rs's
   default branch at build time, so branding variables only take effect once #110
   is on `master`.
-- The archive has **no sign-in**. Anyone who can reach it can read and delete
-  documents. The service therefore gets **no public domain** until phase P3
-  (identity) is done in its own session.
+- Without the `PAPERLESS_OIDC_*` variables the archive has **no sign-in**:
+  anyone who can reach it can read and delete documents, and the log says so at
+  start. Generate a public domain only after an image with sign-in (tesseract-rs
+  #112) is deployed with the variables set, following the order in §2a. Sign-in needs tesseract-rs with the `auth` module (tesseract-rs #112) on
+  its default branch.
 
 ## 1. Create the service (P0)
 
@@ -42,10 +44,13 @@ existing service.
    Dockerfile also accepts optional build arguments `TESSERACT_RS_REF`,
    `LANCE_GRAPH_REF`, `NDARRAY_REF` and `OGAR_REF` to reproduce a specific
    build; leave them unset normally.
-5. Settings → Deploy → healthcheck path `/` (the upload page; there is no
-   `/healthz` until P2), and a healthcheck timeout of a few minutes: the first
-   start loads the OCR model and opens the archive.
-6. Settings → Networking: **do not generate a public domain.**
+5. Settings → Deploy → healthcheck path `/` while the image predates
+   tesseract-rs #112; switch it to `/healthz` (answers `ok` without a session)
+   once a build that includes #112 is deployed, and before turning sign-in on,
+   because `/` then redirects to sign-in. Healthcheck timeout: a few minutes,
+   the first start loads the OCR model and opens the archive.
+6. Settings → Networking: **do not generate a public domain** until §2a is
+   done.
 
 The first build compiles lancedb, lance and the OCR stack from source and takes
 a long time. A build failing on `protoc` means the builder stage lost
@@ -56,7 +61,7 @@ a long time. A build failing on `protoc` means the builder stage lost
 | Check | Expected |
 |---|---|
 | deploy logs | start lines from `tesseract-paperless-web`, no `BRAND_* ignored` line (unless a value was invalid) |
-| healthcheck | passes on `/` |
+| healthcheck | passes on `/healthz` |
 | volume | the log shows no permission error for `/app/data`; after an upload and a redeploy the document is still listed |
 | from another service in the project | `curl http://paperless.railway.internal:8080/` returns the upload page with the configured name |
 
@@ -71,6 +76,88 @@ Two caveats:
   answer from another service while the healthcheck passes, the project's private
   network may be IPv6-only; the fix is to bind `[::]` in tesseract-paperless-web.
   This has not been tested on Railway.
+
+## 2a. Sign-in with the existing Zitadel (`login.msgraph.de`)
+
+The archive signs users in with OIDC (authorization code + PKCE) through
+`ogar-oidc` / `ogar-auth`, the same way report-rs does. It is off until
+`PAPERLESS_OIDC_ISSUER` is set; once set, every page except `/auth/*` and
+`/healthz` needs a session, and a set but invalid configuration stops the
+service at start instead of running it open.
+
+**Zitadel (a new application; existing applications are not changed):**
+
+1. In the project that should hold the paperless roles (a new project
+   `paperless` keeps them apart from report-rs's roles), create the role key
+   `paperless.user` (and `paperless.admin` if wanted).
+2. In that project, create a new **Web** application, authentication method
+   **PKCE** (no client secret). Redirect URI
+   `https://<paperless domain>/auth/callback`. No post-logout URI is needed:
+   "Sign out" ends the archive session only, and the Zitadel session stays, so
+   the next sign-in may go through without asking for a password.
+3. In the application's token settings, enable **User roles inside ID Token**.
+   Without it the token carries no roles and every sign-in is refused as
+   "access not set up".
+4. Grant `paperless.user` to the people who may use the archive.
+
+**Railway variables on the paperless service:**
+
+| Variable | Value | Required |
+|---|---|---|
+| `PAPERLESS_OIDC_ISSUER` | `https://login.msgraph.de` | yes (turns sign-in on) |
+| `PAPERLESS_OIDC_CLIENT_ID` | the client id of the new application | yes |
+| `PAPERLESS_OIDC_REDIRECT_URL` | `https://<paperless domain>/auth/callback` (must match Zitadel exactly) | yes |
+| `PAPERLESS_OIDC_ROLES` | `paperless.user` (comma-separated role keys that admit a user; exact match) | yes |
+| `PAPERLESS_SESSION_KEY` | 32 random bytes, `openssl rand -hex 32` (sealed variable) | recommended; without it every redeploy signs everyone out |
+| `PAPERLESS_OIDC_ORGS` | Zitadel organization ids; a role then counts only when granted under one of them | optional |
+| `PAPERLESS_API_CLIENTS` | client ids whose tokens are accepted as `Authorization: Bearer`, comma-separated (the delegation application, e.g. the one report-rs signs in with); unset: no bearer tokens | optional, for later integration |
+| `PAPERLESS_OIDC_CLIENT_SECRET` | only for a confidential (non-PKCE) application (sealed) | optional |
+| `PAPERLESS_OIDC_ROLES_CLAIM` / `PAPERLESS_OIDC_EXTRA_SCOPES` | defaults `urn:zitadel:iam:org:project:roles` / `urn:zitadel:iam:org:projects:roles` | optional |
+
+**Order.** The archive must never be public while it is open, and a
+Railway-generated hostname only exists once it is generated. So turn sign-in on
+first with a placeholder callback, then add the domain:
+
+1. Make sure the deployed image includes tesseract-rs #112. The Dockerfile clones
+   tesseract-rs's default branch, but Railway may reuse a cached clone layer:
+   redeploy with the build cache disabled (or set `TESSERACT_RS_REF` to the merge
+   commit) after #112 merges. The healthcheck path is `/healthz` from here on.
+2. Set all `PAPERLESS_OIDC_*` variables and `PAPERLESS_SESSION_KEY`, with
+   `PAPERLESS_OIDC_REDIRECT_URL=https://placeholder.invalid/auth/callback`, and
+   redeploy. Check the deploy log for
+   `sign-in via https://login.msgraph.de (client …), roles [paperless.user]`.
+   Every page now requires sign-in; nobody can sign in yet, and nothing is open.
+3. Generate the public domain (or attach a custom one). Confirm from outside that
+   `curl -sI https://<domain>/documents` answers `303` to `/auth/login…` and
+   `curl -s -X POST https://<domain>/upload` answers `401`.
+4. Put `https://<domain>/auth/callback` into the Zitadel application's redirect
+   URIs and into `PAPERLESS_OIDC_REDIRECT_URL`, and redeploy.
+5. Sign in as a user holding `paperless.user` (checks below).
+
+**Checks:**
+
+| Check | Expected |
+|---|---|
+| open the domain while signed out | redirect to `login.msgraph.de` |
+| sign in as a user holding `paperless.user` | lands on the requested page; "Sign out" in the footer |
+| sign in as a user without the role | "access has not been set up for your account" (log: `sign-in refused (denied)`) |
+| `POST /upload` without a session (curl) | `401` |
+| redeploy with `PAPERLESS_SESSION_KEY` set | still signed in |
+| `/healthz` | `ok` without a session |
+
+**Delegation (for the later report-rs integration).** A service that calls the
+archive on a user's behalf sends that user's token as `Authorization: Bearer`,
+the pattern zammad-ticket uses with `TICKET_API_CLIENTS`. The token is accepted
+when it is addressed to a client in `PAPERLESS_API_CLIENTS`, carries one of
+`PAPERLESS_OIDC_ROLES`, and passes the same signature, issuer and expiry checks;
+it creates no session. A request with an `Authorization` header is never
+redirected: a bad token is a `401`. The delegating application must grant the
+same role keys (put it in the project that holds `paperless.user`, or grant that
+project to the application's project). Nothing in report-rs changes until that
+integration.
+
+**Not covered yet:** every admitted user sees every document. Separation by
+customer (plan §6) is still to do.
 
 ## 3. CI (P1)
 
