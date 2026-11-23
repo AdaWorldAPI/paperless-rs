@@ -102,8 +102,11 @@ that survives losing the volume.
 
 A record is written only after its original, so a record in S3 always has its
 original in S3. The upload answers once step 2 succeeds. Steps 3 and 4 are
-attempted immediately, and a failure there is logged and retried by the
-replicator (§5). A failed S3 write never fails the upload or removes the local
+started in the background right after step 2, before search indexing, so a
+failed index write cannot leave a committed document uncopied, and the upload
+never waits for S3. At most four such copies run at once. A failure is logged
+and retried by the replicator (§5); so is a copy that never ran because the
+process stopped. A failed S3 write never fails the upload or removes the local
 document.
 
 **Original attached to an older document** (a re-upload of a document stored
@@ -155,8 +158,10 @@ brings the deleted document back. That is logged, and it is the deliberate
 trade: an automatic cleanup that treats "missing locally" as "deleted" would
 erase the S3 copy exactly when the local copy is damaged.
 
-The dashboard shows how many documents are not yet fully in S3 (no record, or
-an original missing), so a stuck copy is visible.
+The dashboard shows about how many documents are not yet fully in S3 (no
+record, or an original missing), so a stuck copy is visible. The count is an
+estimate: the S3 listing and the local list are read one after the other, so a
+copy that lands in between can be counted as missing until the next pass.
 
 ## 6. Restore
 
@@ -180,6 +185,11 @@ documents, or a restore marker (`<BLOB_DIR>/.restore-in-progress`) is present.
 5. Remove the marker.
 6. The existing start-up `reconcile` rebuilds the search index from the
    restored rows.
+
+Before importing, the restore keeps the metadata snapshot it read beside the
+marker (`<BLOB_DIR>/.restore-snapshot.json`) and removes it with the marker. A
+restore that resumes imports that same snapshot, never a newer one from S3, so
+it cannot leave rows from two different snapshots.
 
 Each step is idempotent, so a restore interrupted by a crash continues on the
 next start: the marker is still there, and documents already restored are
