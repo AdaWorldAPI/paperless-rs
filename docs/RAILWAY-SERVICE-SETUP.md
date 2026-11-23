@@ -106,12 +106,12 @@ service at start instead of running it open.
 |---|---|---|
 | `PAPERLESS_OIDC_ISSUER` | `https://login.msgraph.de` | yes (turns sign-in on) |
 | `PAPERLESS_OIDC_CLIENT_ID` | the client id of the new application | yes |
-| `PAPERLESS_OIDC_REDIRECT_URL` | `https://<paperless domain>/auth/callback` (must match Zitadel exactly) | yes |
+| `PAPERLESS_OIDC_REDIRECT_URL` | `https://<paperless domain>/auth/callback` (must match Zitadel exactly; no query or fragment) | yes |
 | `PAPERLESS_OIDC_ROLES` | `paperless.user` (comma-separated role keys that admit a user; exact match) | yes |
 | `PAPERLESS_SESSION_KEY` | 32 random bytes, `openssl rand -hex 32` (sealed variable) | recommended; without it every redeploy signs everyone out |
 | `PAPERLESS_OIDC_ORGS` | Zitadel organization ids; a role then counts only when granted under one of them | optional |
 | `PAPERLESS_API_CLIENTS` | client ids whose tokens are accepted as `Authorization: Bearer`, comma-separated (the delegation application, e.g. the one report-rs signs in with); unset: no bearer tokens | optional, for later integration |
-| `PAPERLESS_OIDC_CLIENT_SECRET` | only for a confidential (non-PKCE) application (sealed) | optional |
+| `PAPERLESS_OIDC_CLIENT_SECRET` | only for a confidential (non-PKCE) application whose authentication method is **POST**; Basic is not supported (sealed) | optional |
 | `PAPERLESS_OIDC_ROLES_CLAIM` / `PAPERLESS_OIDC_EXTRA_SCOPES` | defaults `urn:zitadel:iam:org:project:roles` / `urn:zitadel:iam:org:projects:roles` | optional |
 
 **Order.** The archive must never be public while it is open, and a
@@ -156,8 +156,16 @@ same role keys (put it in the project that holds `paperless.user`, or grant that
 project to the application's project). Nothing in report-rs changes until that
 integration.
 
-**Not covered yet:** every admitted user sees every document. Separation by
-customer (plan §6) is still to do.
+**Not covered yet:**
+
+- Every admitted user sees every document. Separation by customer (plan §6) is
+  still to do.
+- With `PAPERLESS_SESSION_KEY` set, "Sign out" ends the session in the running
+  process only. A copy of the cookie kept from before the sign-out opens again
+  after a restart, until it expires (at most 8 hours after sign-in). Changing
+  `PAPERLESS_SESSION_KEY` invalidates every outstanding session at once.
+- Form posts (upload, delete) must come from the archive's own domain; a page on
+  another subdomain cannot submit them with the user's session.
 
 ## 3. CI (P1)
 
