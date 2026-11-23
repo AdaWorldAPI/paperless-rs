@@ -127,7 +127,9 @@ Record each as a Linear issue before acting on it; report-rs decisions belong in
 
 1. Private-network origin vs public HTTPS for the report-rs client before P3.
 2. Whether the JSON API lives in tesseract-paperless-web (recommended: one binary, one source of truth) or in a paperless-rs crate in front of it.
-3. Owning customer per document: taken from the token at intake (recommended) or from a report-rs field.
+3. Source of the customer in each (customer, hash) association (§6): the caller's verified token at intake
+   (recommended, as §6 specifies) or a report-rs field. Either way it records an association, never a single
+   owning customer per document.
 4. How long the CI gate may take inside a Railway build before tests move to the manual workflow.
 5. How a user's browser reaches a paperless document page from report-rs before P3: an authenticated route through report-rs, or no viewing until paperless has its own public, signed-in domain.
 
