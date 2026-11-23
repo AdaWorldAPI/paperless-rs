@@ -23,8 +23,9 @@ existing service.
    branch `main`. The `Dockerfile` at the repository root is used by default.
 2. Name the service `paperless`. Its private address is then
    `paperless.railway.internal`.
-3. Add a volume mounted at `/app/data`. Without it the archive and the search
-   index are lost on every redeploy. **The image runs as a non-root user
+3. Add a volume mounted at `/app/data`. Without it the archive, the search
+   index and the uploaded originals (`/app/data/blobs`, from tesseract-rs #114)
+   are lost on every redeploy. **The image runs as a non-root user
    (`appuser`, uid 10001), and a mounted volume does not keep the image's
    `chown`**, so the process may be unable to write there. Set
    `RAILWAY_RUN_UID=0` (Railway's documented setting for this case); the
@@ -35,6 +36,7 @@ existing service.
    |---|---|---|
    | `PORT` | `8080` | a fixed port, so other services can reach `paperless.railway.internal:8080` |
    | `RAILWAY_RUN_UID` | `0` | lets the process write the mounted volume (it then runs as root) |
+   | `BLOB_DIR` | leave unset | the image sets `/app/data/blobs`; override only to move the originals elsewhere on the volume |
    | `BRAND_NAME` | `paperless-rs` | optional; unset = unbranded |
    | `BRAND_TAGLINE` | `Document intake and archive for report-rs` | optional |
    | `BRAND_ACCENT` | for example `#0f766e` | optional, `#rgb` or `#rrggbb` |
@@ -197,3 +199,31 @@ When P5 starts:
    document with its own hash; the original is never overwritten.
 5. Gate: edit and save produces a new hash, and the original still opens
    unchanged.
+
+## S3 copy (slice C)
+
+Optional, and needs a build that includes the slice C tesseract-rs PR. The
+service then keeps a copy of every original, every document record and the
+metadata in an S3 bucket, and restores an empty volume from it at start.
+Protocol and failure modes: `RECOVERY.md`.
+
+Use a **bucket of its own** and a key that can reach **only that bucket**
+(a bucket-scoped access key, or a policy limited to it). The key's scope is the
+access control. That the service reads only `PAPERLESS_S3_*` and never `AWS_*`
+only stops it from picking up report-rs's credentials by accident; a key with
+account-wide rights would still reach report-rs's buckets.
+
+| Variable | Value | Required |
+|---|---|---|
+| `PAPERLESS_S3_ENDPOINT` | the bucket's `https://` endpoint (Tigris: `https://fly.storage.tigris.dev`) | yes, to turn the copy on |
+| `PAPERLESS_S3_BUCKET` | the bucket name | yes |
+| `PAPERLESS_S3_ACCESS_KEY_ID` | access key (sealed) | yes |
+| `PAPERLESS_S3_SECRET_ACCESS_KEY` | secret (sealed) | yes |
+| `PAPERLESS_S3_REGION` | default `auto` | optional |
+| `PAPERLESS_S3_PREFIX` | default `paperless` | optional |
+
+Set all four required variables or none: a partial set stops the service at
+start. With the copy on and an empty volume, the service refuses to start
+while S3 is unreachable, rather than start an empty archive. The deploy log
+names the outcome: `S3 copy: off`, `S3 copy: on (…)`, or the restore summary.
+
