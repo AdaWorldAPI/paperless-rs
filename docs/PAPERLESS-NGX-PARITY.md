@@ -208,6 +208,13 @@ and Settings stay out of the nav until they exist.
   rename) before the document row (S-5); verify the hash on read; a duplicate
   upload reuses the blob. Filename and MIME stay in the document row. A
   protected download route serves the exact bytes.
+- **Documents from before the blob store.** Their row and hash exist, their
+  original does not. Today a duplicate upload is recognised by the S-2 gate,
+  skips OCR and lands on the existing document. With the blob store, a
+  duplicate of such a row stores the supplied bytes as its blob (they hash to
+  the row's key, so they are its original by definition), leaves the row and
+  its metadata unchanged, runs no OCR, and lands on the existing document as
+  today. Until then, the detail page says the original is not available.
 - **Recovery (Phase 4).** S3 (Tigris) as the durable copy of originals and of
   recoverable metadata records; `/app/data` (volume `paperless-archive`, 50 GB)
   keeps LanceDB, Tantivy and a local blob cache. The commit order, recovery
@@ -241,24 +248,31 @@ Durability and authentication come before more UI.
 | A2 | Shared Askama shell; Dashboard, Inbox, Documents, per-kind definition entries; existing routes unchanged | tesseract-rs |
 | B | Original-file store, download route, S-5 order, failure injection | tesseract-rs |
 | C | S3 durable copy, boot verification and hydration, index rebuild | tesseract-rs (+ shared store crate) |
+| T | Customer separation: an owner (tenant) per document, set at intake, and a per-document access check on every read, list, search, download and action | tesseract-rs |
 | D | A2UI vertical slice on the document list or detail, same view model and authorization as Askama | tesseract-rs + a2ui-rs |
 | E | Filters, batch metadata, review-and-next, WordCraft readiness (DOCX contract first) | tesseract-rs |
 
 ## §9 Acceptance tests per slice
 
 - **A1:** with `PAPERLESS_REQUIRE_AUTH=1` and no issuer, startup fails; with
-  an issuer it starts; without the flag, today's behaviour is unchanged.
+  a complete, valid sign-in configuration (issuer, client id, redirect URL,
+  roles, as in the Railway guide) it starts; without the flag, today's
+  behaviour is unchanged.
 - **A2:** every nav entry returns 200 for a signed-in user and 303/401 without
   a session; every pre-existing route still answers as before; Inbox lists
   exactly the documents not marked reviewed, and marking one reviewed removes it.
 - **B:** upload then download returns byte-identical content; a tampered blob
   is refused on read; a duplicate upload stores no second blob and runs no OCR;
   a crash between blob and row leaves an orphan blob, never a row without a blob;
-  an unauthenticated download is refused.
+  an unauthenticated download is refused; a duplicate upload of a document
+  stored before the blob store adds its blob, changes no row or metadata, runs
+  no OCR and lands on the existing document.
 - **C:** restart and redeploy keep originals, metadata and search; an empty
   volume rehydrates from S3; S3 down gives the specified degraded or fail-closed
-  answer; a corrupted search index rebuilds deterministically; a request for
-  another tenant's document neither returns it nor reveals that it exists.
+  answer; a corrupted search index rebuilds deterministically.
+- **T:** a request for another tenant's document, by detail, list, search,
+  download or action, neither returns it nor reveals that it exists; this runs
+  after T, never before.
 - **D:** the Askama page and the A2UI frame for one document carry the same
   fields; a field outside the role mask is absent from the frame; an action
   without authorization is refused on the server.
