@@ -190,9 +190,11 @@ documents, or a restore marker (`<BLOB_DIR>/.restore-in-progress`) is present.
    the record.
 4. Read `metadata/current.json` and import definitions, assignments and reviews,
    keeping ids. Assignments and reviews whose document is not in the S3 copy
-   are dropped. Those of a document whose record was skipped as damaged are
-   kept: otherwise the next snapshot upload would remove them from S3 too, and
-   repairing the record later could not bring them back.
+   are dropped, including those of a document whose record was skipped as
+   damaged. Their metadata stays in the S3 snapshot, which the snapshot hold
+   keeps from being replaced (below), so a restore after the record is repaired
+   brings it back. Importing them locally would leave rows that a later restore
+   from a newer snapshot could not replace.
 5. Remove the marker.
 6. The existing start-up `reconcile` rebuilds the search index from the
    restored rows.
