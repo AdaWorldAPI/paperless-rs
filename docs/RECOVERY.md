@@ -43,7 +43,7 @@ Everything sits under `<prefix>/`:
 | Key | Content | Written |
 |---|---|---|
 | `originals/<sha256>` | the exact uploaded bytes | once, never changed |
-| `documents/<sha256>.json` | the document record (§3.1) | once, never changed |
+| `documents/<sha256>.json` | the document record (§3.1) | once; rewritten once if an original is attached later (§4) |
 | `metadata/current.json` | the metadata snapshot (§3.2) | replaced after every metadata change |
 
 The key of an original is its SHA-256, so a restored original is checked
@@ -102,6 +102,17 @@ attempted immediately, and a failure there is logged and retried by the
 replicator (§5). A failed S3 write never fails the upload or removes the local
 document.
 
+**Original attached to an older document** (a re-upload of a document stored
+before slice B backfills its original locally, `PAPERLESS-NGX-PARITY.md` §6):
+
+1. Local original.
+2. S3 `originals/<sha256>`.
+3. S3 `documents/<sha256>.json`, rewritten with `has_original: true`.
+
+The record is rewritten only after the original is in S3, so a record that
+says `has_original: true` always has its original. If step 2 or 3 fails, the
+replicator (§5) repeats both.
+
 **Metadata change** (assign, unassign, review, definition create, rename,
 rule, retire): after the local write, the snapshot is rebuilt from the current
 local state and uploaded. Snapshot uploads are serialized, and each one reads
@@ -122,8 +133,10 @@ in S3, never a record whose original is missing.
 
 At start (after any restore) and every 15 minutes, the replicator:
 
-- lists `documents/` and uploads, for every local document without a record,
-  its original (if any) and then its record;
+- lists `documents/` and `originals/`, and copies every local document that
+  has no record, or has a local original that S3 does not hold (an original
+  attached after the document was copied): its original (if any) first, then
+  its record;
 - uploads the metadata snapshot.
 
 The replicator **never deletes** from S3. Only an explicit delete removes S3
@@ -132,8 +145,8 @@ brings the deleted document back. That is logged, and it is the deliberate
 trade: an automatic cleanup that treats "missing locally" as "deleted" would
 erase the S3 copy exactly when the local copy is damaged.
 
-The dashboard shows how many documents are not yet in S3, so a stuck copy is
-visible.
+The dashboard shows how many documents are not yet fully in S3 (no record, or
+an original missing), so a stuck copy is visible.
 
 ## 6. Restore
 
@@ -197,6 +210,10 @@ From `PAPERLESS-NGX-PARITY.md` §9, made concrete:
 - An interrupted restore completes on the next start.
 - A record whose original fails its hash check restores without an original.
 - The replicator never deletes from S3.
+- An older document copied without an original, then given its original by a
+  re-upload whose immediate S3 copy fails: the replicator uploads the original,
+  then rewrites the record with `has_original: true`, and a restore brings the
+  original back.
 
 All of these run against an in-memory object store in the test suite. The
 request signing is tested against fixed vectors, and once against a real
