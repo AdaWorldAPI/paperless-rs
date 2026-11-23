@@ -129,6 +129,12 @@ one.
 The record goes before the original, so a failure leaves an unused original
 in S3, never a record whose original is missing.
 
+**Copy and delete of the same document never interleave.** A copy (the one
+after an upload and every replicator copy) takes the same per-document lock a
+delete holds, and reads the local row under it. A copy that waited for a delete
+finds the row gone and writes nothing, so a deleted document cannot reappear in
+S3.
+
 ## 5. Replication
 
 At start (after any restore) and every 15 minutes, the replicator:
@@ -158,7 +164,8 @@ documents, or a restore marker (`<BLOB_DIR>/.restore-in-progress`) is present.
 1. Write the restore marker.
 2. List `documents/` (all pages).
 3. For each record not already local: read the record and check its schema and
-   hash; if `has_original`, read `originals/<sha256>`, check that its SHA-256
+   hash; if `has_original`, or if `originals/<sha256>` is listed (a record
+   whose rewrite after a backfill failed still says false), read it, check that its SHA-256
    equals the key, and write it locally (slice B store); then write the row from
    the record.
 4. Read `metadata/current.json` and import definitions, assignments and reviews,
