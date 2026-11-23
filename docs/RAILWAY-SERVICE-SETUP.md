@@ -109,6 +109,7 @@ service at start instead of running it open.
 | `PAPERLESS_OIDC_REDIRECT_URL` | `https://<paperless domain>/auth/callback` (must match Zitadel exactly; no query or fragment) | yes |
 | `PAPERLESS_OIDC_ROLES` | `paperless.user` (comma-separated role keys that admit a user; exact match) | yes |
 | `PAPERLESS_SESSION_KEY` | 32 random bytes, `openssl rand -hex 32` (sealed variable) | recommended; without it every redeploy signs everyone out |
+| `PAPERLESS_REQUIRE_AUTH` | `1`: the service refuses to start unless sign-in is configured, so a lost or unset `PAPERLESS_OIDC_ISSUER` can never bring the archive up open (needs a build with tesseract-rs PR A of the parity plan) | recommended once sign-in works |
 | `PAPERLESS_OIDC_ORGS` | Zitadel organization ids; a role then counts only when granted under one of them | optional |
 | `PAPERLESS_API_CLIENTS` | client ids whose tokens are accepted as `Authorization: Bearer`, comma-separated (the delegation application, e.g. the one report-rs signs in with); unset: no bearer tokens | optional, for later integration |
 | `PAPERLESS_OIDC_CLIENT_SECRET` | only for a confidential (non-PKCE) application whose authentication method is **POST**; Basic is not supported (sealed) | optional |
