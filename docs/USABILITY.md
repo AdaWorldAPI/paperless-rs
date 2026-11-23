@@ -175,10 +175,11 @@ it — which is the mechanism every "route this to review" item below needs.
 ## §5 The gaps, ranked by usability bought
 
 Ranked by what each buys a person, not by implementation cost. Each names
-what already exists to build it from — in every case the data is present
-and unsurfaced, which is why these are projection decisions rather than
-pipeline work — and what it is in render-path terms (a projected **field**,
-or an **action** by address).
+what already exists to build it from — for every item except the first the
+data is present and unsurfaced, which is why those are projection decisions
+rather than pipeline work; item 1 first needs the original file stored —
+and what it is in render-path terms (a projected **field**, or an
+**action** by address).
 
 **1. Show the page image beside the text.** *Field.* Makes every other
 signal actionable. The raw bytes are **not** stored today
