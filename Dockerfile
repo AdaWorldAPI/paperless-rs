@@ -56,12 +56,19 @@ ARG TESSERACT_RS_REF=""
 ARG LANCE_GRAPH_REF=""
 ARG NDARRAY_REF=""
 ARG OGAR_REF=""
+# A new deployment must build the repositories' CURRENT heads. The clone step's text
+# does not change when tesseract-rs (or a sibling) moves, so a cached layer would keep
+# building the old code. Railway injects RAILWAY_DEPLOYMENT_ID at build time, new for
+# every deployment: using it in the step makes each deployment clone afresh. (A Railway
+# "redeploy" reuses its finished build and never reaches this step.)
+ARG RAILWAY_DEPLOYMENT_ID=""
 RUN set -eu; \
+    echo "deployment ${RAILWAY_DEPLOYMENT_ID:-local}: cloning current heads"; \
     clone() { \
       name="$1"; ref="$2"; \
       git clone --depth 1 ${ref:+--branch "$ref"} \
         "https://github.com/AdaWorldAPI/$name.git" "/src/$name"; \
-      echo "cloned $name @ ${ref:-default branch}"; \
+      echo "cloned $name @ ${ref:-default branch} = $(git -C "/src/$name" rev-parse --short HEAD)"; \
     }; \
     clone tesseract-rs "$TESSERACT_RS_REF"; \
     clone lance-graph "$LANCE_GRAPH_REF"; \
